@@ -1,0 +1,23 @@
+{
+  "name": "pavcon-licitacoes",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sistema de automação de licitações Pavcon — Supabase backend + Edge Functions",
+  "scripts": {
+    "supabase": "supabase",
+    "db:push": "supabase db push",
+    "db:reset": "supabase db reset",
+    "db:diff": "supabase db diff",
+    "db:lint": "supabase db lint",
+    "fn:serve": "supabase functions serve --env-file ./supabase/functions/.env",
+    "fn:deploy:auth": "supabase functions deploy orcafascio-auth",
+    "types:gen": "supabase gen types typescript --linked > supabase/types/database.ts",
+    "link": "supabase link --project-ref cwgjjjlyccgivscngzgz"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "supabase": "^2.98.2"
+  }
+}

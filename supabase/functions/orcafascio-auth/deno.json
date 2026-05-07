@@ -1,0 +1,18 @@
+{
+  "imports": {
+    "supabase": "https://esm.sh/@supabase/supabase-js@2.45.4"
+  },
+  "tasks": {
+    "lint": "deno lint",
+    "fmt": "deno fmt"
+  },
+  "lint": {
+    "rules": {
+      "tags": ["recommended"]
+    }
+  },
+  "fmt": {
+    "indentWidth": 2,
+    "singleQuote": true
+  }
+}
