@@ -11,9 +11,10 @@
     "db:lint": "supabase db lint",
     "fn:serve": "supabase functions serve --env-file ./supabase/functions/.env",
     "fn:deploy:auth": "supabase functions deploy orcafascio-auth",
+    "fn:deploy:web-auth": "supabase functions deploy orcafascio-web-auth",
     "fn:deploy:sync-grupos": "supabase functions deploy orcafascio-sync-grupos",
     "fn:deploy:extracao": "supabase functions deploy extracao-edital",
-    "fn:deploy:all": "supabase functions deploy orcafascio-auth && supabase functions deploy orcafascio-sync-grupos && supabase functions deploy extracao-edital",
+    "fn:deploy:all": "supabase functions deploy orcafascio-auth && supabase functions deploy orcafascio-web-auth && supabase functions deploy orcafascio-sync-grupos && supabase functions deploy extracao-edital",
     "types:gen": "supabase gen types typescript --linked > supabase/types/database.ts",
     "link": "supabase link --project-ref cwgjjjlyccgivscngzgz",
     "validate": "node scripts/validate.mjs"
