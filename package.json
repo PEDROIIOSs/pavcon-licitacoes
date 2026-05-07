@@ -12,7 +12,8 @@
     "fn:serve": "supabase functions serve --env-file ./supabase/functions/.env",
     "fn:deploy:auth": "supabase functions deploy orcafascio-auth",
     "types:gen": "supabase gen types typescript --linked > supabase/types/database.ts",
-    "link": "supabase link --project-ref cwgjjjlyccgivscngzgz"
+    "link": "supabase link --project-ref cwgjjjlyccgivscngzgz",
+    "validate": "node scripts/validate.mjs"
   },
   "engines": {
     "node": ">=20"

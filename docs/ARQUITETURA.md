@@ -280,9 +280,33 @@ Ver detalhes em conversas anteriores. Sumário:
 | Análise histórica | Edge Function `analise-historica` | A implementar |
 | Gerar proposta Pavcon | Edge Function `gerar-proposta` | ⚠️ Bloqueado |
 
+## Pista: API interna da web (`/v2023/...`) — Plano B'
+
+Inspeção do tráfego do navegador (07/05/2026) revelou que o front do Orçafascio fala com endpoints internos sob `/v2023/`, com autenticação via cookie de sessão (`_orcafascio_session`):
+
+```
+POST https://app.orcafascio.com/v2023/bud/budgets/{budget_id}/items/
+Content-Type: application/x-www-form-urlencoded
+Cookie: _orcafascio_session=...; usuario_id=...
+```
+
+Isso significa que **existe** endpoint funcionando para adicionar itens a um orçamento — só não é a API pública de `api.orcafascio.com/api/v1/`. Se o suporte do Orçafascio confirmar que a API pública **não** terá endpoint de criação, a alternativa **antes** do Playwright é:
+
+1. Login programático com `email` + `senha` em `https://app.orcafascio.com/users/sign_in` (pegar `_orcafascio_session` do `Set-Cookie`)
+2. Replay dos endpoints `/v2023/...` que o front usa
+
+Trade-offs:
+
+- ✅ Mais rápido e estável que Playwright
+- ⚠️ Endpoint não documentado → contrato pode quebrar a qualquer release
+- ⚠️ Login com senha (vs. `secret_token`) → secret diferente no Vault, e provavelmente exige captcha/2FA em algum momento
+- ⚠️ Cookies têm TTL curto comparado ao token JWT de 24h
+
+**Decisão pendente**: só seguir esse caminho depois da resposta oficial do suporte sobre a API pública.
+
 ## Riscos abertos
 
-1. **API do Orçafascio sem endpoints de orçamento** — bloqueio principal. Aguardando suporte.
+1. **API do Orçafascio sem endpoints de orçamento** — bloqueio principal. Aguardando suporte. Pista alternativa registrada acima (API interna `/v2023/`).
 2. **Custo do Gemini para PDFs longos** — o CSPII tem 120 páginas, custou ~$1.42 simulado. Editais maiores podem subir muito. Monitorar via `extracoes_ocr.custo_usd` desde o dia 1.
 3. **Qualidade da extração de tabelas complexas** — algumas planilhas têm células mescladas, hierarquia visual sem indentação clara, etc. Risco mitigado pelo passo `aguardando_revisao_humana`, mas pode atrasar o fluxo se for frequente.
 4. **Mudança de UI do Orçafascio** (caso usemos Playwright como Plano C) — automação frágil. Só usar como último recurso.
