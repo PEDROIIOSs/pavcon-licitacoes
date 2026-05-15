@@ -276,9 +276,71 @@ Ver detalhes em conversas anteriores. Sumário:
 | Upload edital | `POST /api/licitacoes/:id/arquivos` | A implementar |
 | Extração | Edge Function `extracao-edital` | A implementar |
 | Revisão humana | `PATCH /api/licitacoes/:id/extracao/:eid/revisao` | A implementar |
-| Cadastrar edital no Orçafascio | Edge Function `orcafascio-cadastrar-edital` | ⚠️ Parcialmente bloqueado |
+| Cadastrar edital no Orçafascio | Edge Function `orcafascio-cadastrar-edital` | ✅ Implementado (Plano A híbrido) |
 | Análise histórica | Edge Function `analise-historica` | A implementar |
 | Gerar proposta Pavcon | Edge Function `gerar-proposta` | ⚠️ Bloqueado |
+
+## API pública do Orçafascio — mapa real (verificado em 2026-05-15)
+
+Após probing direto da API + leitura da [documentação oficial em apidog](https://orcafascio.apidog.io/), o mapa real é:
+
+**Base URL**: `https://api.orcafascio.com/api/v1`
+
+### ✅ Endpoints que EXISTEM e funcionam
+
+```
+POST /login/authenticate_user           — login com {email, secret_token}, devolve auth_token JWT 24h
+GET  /base/mybase/groups                — listar grupos (pastas)
+POST /base/mybase/groups                — criar grupo  body: {description}
+GET  /base/mybase/groups/{id}           — consultar
+GET  /base/mybase/resources             — listar insumos
+GET  /resources/find_by_code            — busca por código
+POST /base/mybase/resources             — criar insumo
+       body: {group_id, code, second_code, description, type:int, unit, local, pnd, pd, pndi, pdi, status, note}
+PUT/DELETE /base/mybase/resources/{id}  — editar/apagar
+GET  /base/mybase/compositions          — listar composições
+GET  /base/mybase/compositions/{id}     — consultar
+GET  /base/mybase/compositions/find_by_code
+POST /base/mybase/compositions          — criar composição (modelo SINAPI ou SICRO)
+       body: {code, second_code, description, labor, type, unit, local, rounding_type, is_sicro, note}
+PUT/DELETE /base/mybase/compositions/{id}
+POST   /base/mybase/compositions/{id}/add-items     — adiciona itens
+         body: {items:[{bank, code, qty}]}
+DELETE /base/mybase/compositions/{id}/remove-items
+POST   /base/mybase/compositions/{id}/add_bases     — define bancos de referência
+GET    /bud/budgets/list                — listar orçamentos
+GET    /report/synthetic                — relatório
+GET    /report/analytical-with-unit-price
+```
+
+### ❌ Endpoints que NÃO existem (confirmado por ausência nos docs + probing)
+
+```
+POST   /bud/budgets             — criar orçamento  ← Bloqueio principal
+POST   /bud/budgets/{id}/stages — criar EAP
+POST   /bud/budgets/{id}/items  — adicionar item ao orçamento
+PUT    /bud/budgets/{id}        — editar BDI / leis sociais / desoneração
+```
+
+### Catálogo de tipos (resources)
+
+```
+type=1  Equipamento          type=8   Franquia
+type=2  Equip. Permanente    type=9   Administração
+type=3  Mão de Obra          type=10  Aluguel
+type=4  Material             type=11  Verba
+type=5  Serviços             type=12  Consultoria
+type=6  Taxas                type=13  Transporte
+type=7  Outros                type=101 Faturamento Direto
+```
+
+### Catálogo de tipos (compositions) — códigos alfa
+
+`ASTU, CANT, COBE, CHOR, DROP, ESCO, ESQV, FOMA, FUES, IMPE, INEL, INPR, INES, INHI, LIPR, MOVT, PARE, PAVI, PINT, PISO, REVE, SEDI, SEEM, SEES, SEOP, SERP, SERT, TRAN, URBA`
+
+### Bancos válidos pra add-items
+
+`SINAPI, SBC, SICRO, ORSE, SEINFRA, FDE, MYBASE` (próprios)
 
 ## Pista: API interna da web (`/v2023/...`) — Plano B'
 

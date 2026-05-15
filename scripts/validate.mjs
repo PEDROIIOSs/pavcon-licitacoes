@@ -102,6 +102,20 @@ for (const r of rpcs) {
   console.log(`  ${symbol} ${r.name.padEnd(34)} HTTP ${r.status}`);
 }
 
-console.log('\n=== Edge Function orcafascio-auth (sem JWT, espera 401) ===');
-const fn = await callOrcafascioAuthUnauthenticated();
-console.log(`  HTTP ${fn.status}: ${fn.body.slice(0, 200)}`);
+console.log('\n=== Edge Functions deployadas (sem JWT, esperando 401) ===');
+const FUNCTIONS = [
+  'orcafascio-auth',
+  'orcafascio-web-auth',
+  'orcafascio-sync-grupos',
+  'extracao-edital',
+  'orcafascio-cadastrar-edital',
+];
+for (const name of FUNCTIONS) {
+  const res = await fetch(`${URL}/functions/v1/${name}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  const symbol = res.status === 401 ? '✓' : '?';
+  console.log(`  ${symbol} ${name.padEnd(32)} HTTP ${res.status}`);
+}
