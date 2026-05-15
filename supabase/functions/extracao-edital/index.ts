@@ -204,7 +204,18 @@ Deno.serve(async (req: Request) => {
       return errorResponse(500, 'Vault não retornou a API key do Gemini.', vaultErr?.message);
     }
 
-    // ---- 3) Transição: extraindo + cria extracoes_ocr ----------------------
+    // ---- 3) Transição: rascunho → aguardando_extracao (se preciso) → extraindo
+    // A máquina de estados (validate_licitacao_status_transition) exige passar
+    // por aguardando_extracao antes de extraindo.
+    if (licitacao.status === 'rascunho') {
+      const { error: stPre } = await admin
+        .from('licitacoes')
+        .update({ status: 'aguardando_extracao' })
+        .eq('id', licitacaoId);
+      if (stPre) {
+        return errorResponse(500, 'Falha ao transicionar rascunho → aguardando_extracao.', stPre.message);
+      }
+    }
     const { error: stT1 } = await admin
       .from('licitacoes')
       .update({ status: 'extraindo' })
