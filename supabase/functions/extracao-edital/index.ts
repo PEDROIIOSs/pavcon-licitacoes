@@ -26,10 +26,14 @@ import {
   HttpError,
   requireAuthenticatedUser,
 } from '../_shared/supabase.ts';
+// Edge Function usa Gemini 2.5 Pro como padrão (key cadastrada + cota free razoável).
+// Pra trocar pra Claude (Opus), basta cadastrar credencial Anthropic e mudar
+// LLM_PROVIDER abaixo pra 'anthropic' + importar de '../_shared/anthropic.ts'.
 import { callGemini, GeminiError } from '../_shared/gemini.ts';
 import { PROMPT_VERSION, SYSTEM_PROMPT } from './prompt.ts';
 
 const GEMINI_MODEL = 'gemini-2.5-pro';
+const LLM_PROVIDER = 'gemini';
 const VALID_START_STATUSES = new Set(['rascunho', 'aguardando_extracao']);
 
 interface RequestBody {
@@ -219,7 +223,7 @@ Deno.serve(async (req: Request) => {
       .insert({
         licitacao_id: licitacaoId,
         arquivo_id: arquivoPrincipal.id,
-        llm_provider: 'gemini',
+        llm_provider: LLM_PROVIDER,
         llm_model: GEMINI_MODEL,
         prompt_versao: PROMPT_VERSION,
         status: 'processando',
@@ -233,11 +237,7 @@ Deno.serve(async (req: Request) => {
 
     // ---- 4) Baixa TODOS PDFs + chama Gemini --------------------------------
     const startedAt = Date.now();
-    const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
-      { text: SYSTEM_PROMPT },
-    ];
 
-    // Adiciona um índice de arquivos pro Gemini saber o que é o quê
     const tipoLabel: Record<string, string> = {
       planilha_orcamentaria: 'Planilha orçamentária (principal)',
       memorial_descritivo: 'Memorial descritivo / composições',
@@ -245,6 +245,11 @@ Deno.serve(async (req: Request) => {
       edital: 'Edital (texto)',
       anexo: 'Anexo (BDI, leis sociais ou outro)',
     };
+
+    const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
+      { text: SYSTEM_PROMPT },
+    ];
+
     if (arquivos.length > 1) {
       parts.push({
         text: `\nESTE EDITAL FOI ENVIADO EM ${arquivos.length} ARQUIVOS. A ordem dos PDFs anexados abaixo é:\n` +
@@ -282,13 +287,19 @@ Deno.serve(async (req: Request) => {
     const duracaoMs = Date.now() - startedAt;
 
     // ---- 5) Parse + validação --------------------------------------------------
+    function stripCodeFences(s: string): string {
+      const m = s.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (m) return m[1].trim();
+      return s.trim();
+    }
     let parsed: ExtractedJson;
     try {
-      const obj = JSON.parse(result.text!);
+      const cleaned = stripCodeFences(result.text!);
+      const obj = JSON.parse(cleaned);
       parsed = validateExtractedJson(obj);
     } catch (parseErr) {
       const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
-      throw new Error(`JSON do Gemini inválido: ${msg}`);
+      throw new Error(`JSON do Gemini inválido: ${msg}. Início: ${result.text?.slice(0, 200)}`);
     }
 
     // ---- 6) Persistir composições -------------------------------------------

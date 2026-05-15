@@ -10,6 +10,7 @@ import {
   type ExtractedItem,
 } from './actions';
 import { ExtractionEditor } from './extraction-editor';
+import { ImportJsonModal } from './import-json-modal';
 
 interface ExtractionSummary {
   id: string;
@@ -37,6 +38,8 @@ interface Props {
 export function ExtractionPanel({ licitacaoId, arquivoId, status, ultimaExtracao }: Props) {
   const [isPending, startTransition] = useTransition();
   const [actionError, setActionError] = useState<string | null>(null);
+  const [importModal, setImportModal] = useState<null | 'notebooklm' | 'claude_code'>(null);
+  const [importResult, setImportResult] = useState<{ composicoes: number; subItens: number } | null>(null);
   const [cadastroResult, setCadastroResult] = useState<{
     grupo_descricao?: string;
     composicoes_criadas?: number;
@@ -105,14 +108,69 @@ export function ExtractionPanel({ licitacaoId, arquivoId, status, ultimaExtracao
       )}
 
       {canStart && (
-        <button
-          onClick={handleStart}
-          disabled={isPending}
-          className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
-        >
-          {isPending ? 'Disparando…' : 'Iniciar extração com Gemini'}
-        </button>
+        <div className="space-y-3">
+          <p className="text-xs text-zinc-600">Escolha como extrair os dados deste orçamento:</p>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            {/* Opção 1 — Gemini API automática */}
+            <button
+              onClick={handleStart}
+              disabled={isPending}
+              className="rounded-md border border-zinc-300 bg-white p-4 text-left hover:bg-zinc-50 disabled:opacity-50"
+            >
+              <p className="text-sm font-semibold text-zinc-900">
+                ⚡ Gemini API (automático)
+              </p>
+              <p className="mt-1 text-xs text-zinc-600">
+                Roda a Edge Function chamando Gemini 2.5 Pro. 1–3 min, ~$0.50/edital.
+              </p>
+            </button>
+
+            {/* Opção 2 — NotebookLM */}
+            <button
+              onClick={() => setImportModal('notebooklm')}
+              disabled={isPending}
+              className="rounded-md border border-zinc-300 bg-white p-4 text-left hover:bg-zinc-50 disabled:opacity-50"
+            >
+              <p className="text-sm font-semibold text-zinc-900">
+                📓 NotebookLM (cola JSON)
+              </p>
+              <p className="mt-1 text-xs text-zinc-600">
+                Você extrai no NotebookLM com prompt pronto, cola o JSON aqui. Free.
+              </p>
+            </button>
+
+            {/* Opção 3 — Claude Code manual */}
+            <button
+              onClick={() => setImportModal('claude_code')}
+              disabled={isPending}
+              className="rounded-md border border-zinc-300 bg-white p-4 text-left hover:bg-zinc-50 disabled:opacity-50"
+            >
+              <p className="text-sm font-semibold text-zinc-900">
+                🤖 Claude Code (cola JSON)
+              </p>
+              <p className="mt-1 text-xs text-zinc-600">
+                Você anexa o PDF no chat do Claude, ele devolve o JSON, você cola.
+              </p>
+            </button>
+          </div>
+          {isPending && <p className="text-xs text-zinc-500">Processando…</p>}
+        </div>
       )}
+
+      {importResult && (
+        <div className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-800">
+          ✓ JSON importado: <strong>{importResult.composicoes}</strong> composições e{' '}
+          <strong>{importResult.subItens}</strong> sub-itens inseridos.
+        </div>
+      )}
+
+      <ImportJsonModal
+        licitacaoId={licitacaoId}
+        source={importModal ?? 'outro'}
+        open={importModal !== null}
+        onClose={() => setImportModal(null)}
+        onSuccess={(c, s) => setImportResult({ composicoes: c, subItens: s })}
+      />
 
       {isExtracting && (
         <div className="rounded-md bg-amber-50 p-4 text-sm text-amber-900">

@@ -169,6 +169,226 @@ export async function approveExtraction(
   return { ok: true };
 }
 
+interface ImportarManualResult extends ActionResult {
+  composicoes_inseridas?: number;
+  sub_itens_inseridos?: number;
+}
+
+const SOURCE_LABELS: Record<string, { provider: 'gemini' | 'anthropic' | 'openai' | 'voyage' | 'orcafascio'; model: string }> = {
+  notebooklm: { provider: 'gemini', model: 'gemini-2.5-pro (via NotebookLM — manual)' },
+  claude_code: { provider: 'anthropic', model: 'claude (via Claude Code — manual)' },
+  outro: { provider: 'gemini', model: 'desconhecido (manual)' },
+};
+
+interface ManualItem {
+  item_codigo: string;
+  nivel: number;
+  pai: string | null;
+  tipo: 'grupo' | 'servico';
+  codigo: string | null;
+  fonte: string | null;
+  descricao: string;
+  unidade: string | null;
+  quantidade: number | null;
+  preco_unitario_sem_bdi: number | null;
+  preco_unitario_com_bdi: number | null;
+  preco_total: number | null;
+  composicao_propria?: {
+    itens: Array<{
+      classe: string;
+      codigo: string | null;
+      fonte: string;
+      descricao: string;
+      unidade: string | null;
+      coeficiente: number;
+      preco_unitario: number | null;
+    }>;
+  };
+}
+
+interface ManualJson {
+  cabecalho: Record<string, unknown>;
+  itens: ManualItem[];
+}
+
+function validateManualJson(raw: unknown): ManualJson {
+  if (!raw || typeof raw !== 'object') throw new Error('JSON deve ser um objeto.');
+  const o = raw as Record<string, unknown>;
+  if (!o.cabecalho || typeof o.cabecalho !== 'object') {
+    throw new Error('Faltou "cabecalho" no JSON.');
+  }
+  if (!Array.isArray(o.itens)) {
+    throw new Error('"itens" deve ser um array.');
+  }
+  for (let i = 0; i < o.itens.length; i++) {
+    const it = o.itens[i] as Partial<ManualItem>;
+    if (!it.item_codigo) throw new Error(`Item #${i}: faltou item_codigo.`);
+    if (typeof it.nivel !== 'number') throw new Error(`Item ${it.item_codigo}: nivel deve ser número.`);
+    if (it.tipo !== 'grupo' && it.tipo !== 'servico') {
+      throw new Error(`Item ${it.item_codigo}: tipo deve ser "grupo" ou "servico".`);
+    }
+    if (!it.descricao) throw new Error(`Item ${it.item_codigo}: faltou descricao.`);
+  }
+  return o as unknown as ManualJson;
+}
+
+function stripCodeFences(s: string): string {
+  const m = s.match(/```(?:json)?\s*([\s\S]*?)```/);
+  return m ? m[1].trim() : s.trim();
+}
+
+export async function importarExtracaoManual(
+  licitacaoId: string,
+  jsonText: string,
+  source: 'notebooklm' | 'claude_code' | 'outro',
+): Promise<ImportarManualResult> {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { error: 'Não autenticado.' };
+
+  // Parse + validate
+  let parsed: ManualJson;
+  try {
+    const cleaned = stripCodeFences(jsonText);
+    parsed = validateManualJson(JSON.parse(cleaned));
+  } catch (e) {
+    return { error: `JSON inválido: ${e instanceof Error ? e.message : String(e)}` };
+  }
+
+  const admin = createAdminClient();
+
+  // Verifica licitação
+  const { data: licitacao, error: licErr } = await admin
+    .from('licitacoes')
+    .select('id, status')
+    .eq('id', licitacaoId)
+    .maybeSingle();
+  if (licErr || !licitacao) return { error: 'Licitação não encontrada.' };
+  const ALLOWED = new Set(['rascunho', 'aguardando_extracao', 'aguardando_revisao_humana', 'erro']);
+  if (!ALLOWED.has(licitacao.status)) {
+    return { error: `Licitação está em "${licitacao.status}", precisa estar em rascunho/aguardando_extracao/aguardando_revisao_humana/erro.` };
+  }
+
+  // Pega o primeiro arquivo da licitação pra referenciar na extração
+  const { data: arquivos } = await admin
+    .from('licitacao_arquivos')
+    .select('id')
+    .eq('licitacao_id', licitacaoId)
+    .order('created_at')
+    .limit(1);
+  const arquivoId = arquivos?.[0]?.id;
+  if (!arquivoId) {
+    return { error: 'Suba pelo menos um arquivo antes de importar o JSON.' };
+  }
+
+  // Limpa extrações antigas dessa licitação
+  await admin.from('extracoes_ocr').delete().eq('licitacao_id', licitacaoId);
+
+  // Cria extração
+  const meta = SOURCE_LABELS[source] ?? SOURCE_LABELS.outro;
+  const { data: extr, error: extrErr } = await admin
+    .from('extracoes_ocr')
+    .insert({
+      licitacao_id: licitacaoId,
+      arquivo_id: arquivoId,
+      llm_provider: meta.provider,
+      llm_model: meta.model,
+      prompt_versao: 'pavcon-extracao-edital-v1',
+      status: 'sucesso',
+      json_extraido: parsed,
+      tokens_input: 0,
+      tokens_output: 0,
+      custo_usd: 0,
+      duracao_ms: 0,
+      concluido_em: new Date().toISOString(),
+    })
+    .select('id')
+    .single();
+  if (extrErr || !extr) {
+    return { error: `Falha ao criar extracao_ocr: ${extrErr?.message}` };
+  }
+  const extracaoId = extr.id as string;
+
+  // Insere composicoes_extraidas
+  const compRows = parsed.itens.map((item, idx) => ({
+    licitacao_id: licitacaoId,
+    extracao_id: extracaoId,
+    item_codigo: item.item_codigo,
+    item_nivel: item.nivel,
+    item_pai_codigo: item.pai,
+    tipo_linha: item.tipo,
+    codigo: item.codigo,
+    fonte: item.fonte,
+    descricao: item.descricao,
+    unidade: item.unidade,
+    quantidade: item.quantidade,
+    preco_unitario_sem_bdi: item.preco_unitario_sem_bdi,
+    preco_unitario_com_bdi: item.preco_unitario_com_bdi,
+    preco_total: item.preco_total,
+    ordem: idx,
+    metadata: {},
+  }));
+  const { data: persistidas, error: cErr } = await admin
+    .from('composicoes_extraidas')
+    .insert(compRows)
+    .select('id, item_codigo');
+  if (cErr || !persistidas) {
+    return { error: `Falha ao gravar composicoes_extraidas: ${cErr?.message}` };
+  }
+  const idByCodigo = new Map(persistidas.map((c) => [c.item_codigo as string, c.id as string]));
+
+  // Insere composicao_propria_itens
+  const subRows: Array<Record<string, unknown>> = [];
+  for (const item of parsed.itens) {
+    if (item.fonte !== 'PROPRIA' || !item.composicao_propria?.itens) continue;
+    const compId = idByCodigo.get(item.item_codigo);
+    if (!compId) continue;
+    item.composicao_propria.itens.forEach((sub, i) => {
+      subRows.push({
+        composicao_extraida_id: compId,
+        classe: sub.classe,
+        codigo: sub.codigo ?? null,
+        fonte: sub.fonte,
+        descricao: sub.descricao,
+        unidade: sub.unidade ?? null,
+        coeficiente: sub.coeficiente,
+        preco_unitario: sub.preco_unitario ?? null,
+        preco_total: sub.preco_unitario != null
+          ? sub.coeficiente * sub.preco_unitario
+          : null,
+        ordem: i,
+      });
+    });
+  }
+  if (subRows.length > 0) {
+    const { error: subErr } = await admin
+      .from('composicao_propria_itens')
+      .insert(subRows);
+    if (subErr) return { error: `Falha ao gravar sub-itens: ${subErr.message}` };
+  }
+
+  // Transições: rascunho/aguardando_extracao → extraindo → extracao_concluida → aguardando_revisao_humana
+  if (licitacao.status === 'rascunho') {
+    await admin.from('licitacoes').update({ status: 'aguardando_extracao' }).eq('id', licitacaoId);
+  }
+  if (['rascunho', 'aguardando_extracao'].includes(licitacao.status)) {
+    await admin.from('licitacoes').update({ status: 'extraindo' }).eq('id', licitacaoId);
+    await admin.from('licitacoes').update({ status: 'extracao_concluida' }).eq('id', licitacaoId);
+  }
+  await admin
+    .from('licitacoes')
+    .update({ status: 'aguardando_revisao_humana' })
+    .eq('id', licitacaoId);
+
+  revalidatePath(`/licitacoes/${licitacaoId}`);
+
+  return {
+    ok: true,
+    composicoes_inseridas: compRows.length,
+    sub_itens_inseridos: subRows.length,
+  };
+}
+
 export async function cadastrarNoOrcafascio(
   licitacaoId: string,
 ): Promise<ActionResult & {
