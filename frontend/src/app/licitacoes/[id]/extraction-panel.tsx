@@ -92,7 +92,7 @@ export function ExtractionPanel({ licitacaoId, arquivoId, status, ultimaExtracao
   return (
     <section className="space-y-4 rounded-lg border border-zinc-200 bg-white p-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-zinc-900">Extração do edital</h2>
+        <h2 className="text-sm font-semibold text-zinc-900">Extração do orçamento</h2>
         {ultimaExtracao && (
           <span className="text-xs text-zinc-500">
             {ultimaExtracao.llm_model} · {ultimaExtracao.prompt_versao}

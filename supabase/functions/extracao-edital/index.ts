@@ -33,7 +33,10 @@ const GEMINI_MODEL = 'gemini-2.5-pro';
 const VALID_START_STATUSES = new Set(['rascunho', 'aguardando_extracao']);
 
 interface RequestBody {
+  // Modo legado (1 arquivo). Continua suportado.
   arquivo_id?: string;
+  // Modo novo (todos os arquivos da licitação). Preferido.
+  licitacao_id?: string;
   trace_id?: string;
 }
 
@@ -107,42 +110,58 @@ Deno.serve(async (req: Request) => {
     return errorResponse(400, 'JSON inválido no body.');
   }
 
-  const arquivoId = body.arquivo_id?.trim();
-  if (!arquivoId) {
-    return errorResponse(400, 'arquivo_id é obrigatório.');
-  }
-
   const traceId = body.trace_id ?? crypto.randomUUID();
   const admin = getServiceRoleClient();
-  let licitacaoId: string | null = null;
+  let licitacaoId: string | null = body.licitacao_id?.trim() ?? null;
   let extracaoId: string | null = null;
 
   try {
     const user = await requireAuthenticatedUser(req);
 
-    // ---- 1) Carrega arquivo + licitação ------------------------------------
-    const { data: arquivo, error: arquivoErr } = await admin
+    // ---- 1) Carrega arquivos da licitação ----------------------------------
+    // Aceita 2 modos:
+    //   - body.licitacao_id → pega TODOS os PDFs da licitação
+    //   - body.arquivo_id   → modo legado, 1 arquivo só
+    if (!licitacaoId && body.arquivo_id) {
+      const { data: arquivoLeg, error: arqLegErr } = await admin
+        .from('licitacao_arquivos')
+        .select('licitacao_id')
+        .eq('id', body.arquivo_id.trim())
+        .maybeSingle();
+      if (arqLegErr || !arquivoLeg) {
+        return errorResponse(404, 'arquivo_id não encontrado.', arqLegErr?.message);
+      }
+      licitacaoId = arquivoLeg.licitacao_id;
+    }
+    if (!licitacaoId) {
+      return errorResponse(400, 'licitacao_id (ou arquivo_id) é obrigatório.');
+    }
+
+    const { data: arquivos, error: arquivosErr } = await admin
       .from('licitacao_arquivos')
       .select(
-        'id, licitacao_id, storage_bucket, storage_path, mime_type, filename_original, size_bytes',
+        'id, licitacao_id, storage_bucket, storage_path, mime_type, filename_original, size_bytes, tipo',
       )
-      .eq('id', arquivoId)
-      .maybeSingle();
-    if (arquivoErr) {
-      return errorResponse(500, 'Falha ao ler licitacao_arquivos.', arquivoErr.message);
+      .eq('licitacao_id', licitacaoId)
+      .order('created_at', { ascending: true });
+    if (arquivosErr) {
+      return errorResponse(500, 'Falha ao ler licitacao_arquivos.', arquivosErr.message);
     }
-    if (!arquivo) {
-      return errorResponse(404, 'Arquivo não encontrado.');
+    if (!arquivos || arquivos.length === 0) {
+      return errorResponse(404, 'Nenhum arquivo encontrado pra esta licitação.');
     }
-    if (arquivo.mime_type !== 'application/pdf') {
-      return errorResponse(415, `MIME ${arquivo.mime_type} não suportado (apenas PDF).`);
+    const naoPdf = arquivos.find((a) => a.mime_type !== 'application/pdf');
+    if (naoPdf) {
+      return errorResponse(
+        415,
+        `Arquivo "${naoPdf.filename_original}" tem MIME ${naoPdf.mime_type}, só PDF é aceito.`,
+      );
     }
-    licitacaoId = arquivo.licitacao_id;
 
     const { data: licitacao, error: licitErr } = await admin
       .from('licitacoes')
       .select('id, status')
-      .eq('id', arquivo.licitacao_id)
+      .eq('id', licitacaoId)
       .maybeSingle();
     if (licitErr || !licitacao) {
       return errorResponse(500, 'Falha ao carregar licitação.', licitErr?.message);
@@ -190,11 +209,16 @@ Deno.serve(async (req: Request) => {
       return errorResponse(500, 'Falha ao transicionar para extraindo.', stT1.message);
     }
 
+    // arquivo_id principal: o primeiro de tipo planilha_orcamentaria,
+    // ou o primeiro arquivo em geral
+    const arquivoPrincipal =
+      arquivos.find((a) => a.tipo === 'planilha_orcamentaria') ?? arquivos[0];
+
     const { data: extr, error: extrErr } = await admin
       .from('extracoes_ocr')
       .insert({
         licitacao_id: licitacaoId,
-        arquivo_id: arquivoId,
+        arquivo_id: arquivoPrincipal.id,
         llm_provider: 'gemini',
         llm_model: GEMINI_MODEL,
         prompt_versao: PROMPT_VERSION,
@@ -207,25 +231,47 @@ Deno.serve(async (req: Request) => {
     }
     extracaoId = extr.id;
 
-    // ---- 4) Baixa PDF + chama Gemini ---------------------------------------
+    // ---- 4) Baixa TODOS PDFs + chama Gemini --------------------------------
     const startedAt = Date.now();
-    const { data: blob, error: dlErr } = await admin
-      .storage
-      .from(arquivo.storage_bucket)
-      .download(arquivo.storage_path);
-    if (dlErr || !blob) {
-      throw new Error(`Falha ao baixar PDF do Storage: ${dlErr?.message ?? 'sem dado'}`);
+    const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
+      { text: SYSTEM_PROMPT },
+    ];
+
+    // Adiciona um índice de arquivos pro Gemini saber o que é o quê
+    const tipoLabel: Record<string, string> = {
+      planilha_orcamentaria: 'Planilha orçamentária (principal)',
+      memorial_descritivo: 'Memorial descritivo / composições',
+      projeto_tecnico: 'Projeto técnico',
+      edital: 'Edital (texto)',
+      anexo: 'Anexo (BDI, leis sociais ou outro)',
+    };
+    if (arquivos.length > 1) {
+      parts.push({
+        text: `\nESTE EDITAL FOI ENVIADO EM ${arquivos.length} ARQUIVOS. A ordem dos PDFs anexados abaixo é:\n` +
+          arquivos.map((a, i) =>
+            `  [${i + 1}] ${tipoLabel[a.tipo] ?? a.tipo} — ${a.filename_original}`
+          ).join('\n') +
+          '\nLeia todos antes de produzir o JSON. Use a planilha orçamentária como fonte primária dos itens, e o memorial/anexos pra preencher cabecalho (BDI, leis sociais, desoneração) e detalhes de composições próprias.\n',
+      });
     }
-    const buffer = new Uint8Array(await blob.arrayBuffer());
-    const base64 = uint8ToBase64(buffer);
+    for (const a of arquivos) {
+      const { data: blob, error: dlErr } = await admin
+        .storage
+        .from(a.storage_bucket)
+        .download(a.storage_path);
+      if (dlErr || !blob) {
+        throw new Error(`Falha ao baixar "${a.filename_original}" do Storage: ${dlErr?.message ?? 'sem dado'}`);
+      }
+      const buffer = new Uint8Array(await blob.arrayBuffer());
+      parts.push({
+        inlineData: { mimeType: 'application/pdf', data: uint8ToBase64(buffer) },
+      });
+    }
 
     const result = await callGemini({
       model: GEMINI_MODEL,
       apiKey,
-      parts: [
-        { text: SYSTEM_PROMPT },
-        { inlineData: { mimeType: 'application/pdf', data: base64 } },
-      ],
+      parts,
       responseJson: true,
       temperature: 0.1,
       admin,

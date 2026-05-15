@@ -5,7 +5,7 @@ import { notFound } from 'next/navigation';
 import { ExtractionPanel } from './extraction-panel';
 import type { ExtractedItem } from './actions';
 
-export const metadata = { title: 'Licitação — Pavcon' };
+export const metadata = { title: 'Orçamento — Pavcon' };
 export const dynamic = 'force-dynamic'; // sempre fresh, refletir estados em transição
 
 export default async function LicitacaoDetailPage({

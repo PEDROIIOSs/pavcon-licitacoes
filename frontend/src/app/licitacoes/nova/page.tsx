@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { UploadForm } from './upload-form';
 
-export const metadata = { title: 'Nova licitação — Pavcon' };
+export const metadata = { title: 'Novo orçamento — Pavcon' };
 
 export default function NovaLicitacaoPage() {
   return (
@@ -9,9 +9,10 @@ export default function NovaLicitacaoPage() {
       <Link href="/dashboard" className="text-sm text-zinc-500 hover:text-zinc-900">
         ← voltar
       </Link>
-      <h1 className="mt-4 text-2xl font-semibold text-zinc-900">Nova licitação</h1>
+      <h1 className="mt-4 text-2xl font-semibold text-zinc-900">Novo orçamento</h1>
       <p className="mt-1 text-sm text-zinc-500">
-        Suba o PDF do edital. Depois você dispara a extração na próxima tela.
+        Suba os PDFs do órgão (planilha orçamentária, composições, BDI, leis sociais…).
+        Depois você dispara a extração na próxima tela.
       </p>
 
       <div className="mt-8">

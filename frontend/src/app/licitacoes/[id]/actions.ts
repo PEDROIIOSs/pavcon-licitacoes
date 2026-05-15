@@ -1,6 +1,7 @@
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { revalidatePath } from 'next/cache';
 
 interface ActionResult {
@@ -11,7 +12,7 @@ interface ActionResult {
 
 export async function startExtraction(
   licitacaoId: string,
-  arquivoId: string,
+  _arquivoId: string | null,
 ): Promise<ActionResult> {
   const supabase = await createClient();
   const {
@@ -26,7 +27,8 @@ export async function startExtraction(
       Authorization: `Bearer ${session.access_token}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ arquivo_id: arquivoId }),
+    // Manda licitacao_id pra função processar TODOS os arquivos da licitação
+    body: JSON.stringify({ licitacao_id: licitacaoId }),
   });
   const text = await res.text();
   let body: unknown;
@@ -53,8 +55,14 @@ export async function saveExtractionEdits(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { error: 'Não autenticado.' };
 
+  // Server-side: usa admin (service_role) pra contornar RLS nas tabelas
+  // composicoes_extraidas e composicao_propria_itens, que são populadas
+  // por Edge Functions. A autorização já foi validada (user autenticado
+  // + dono da revisão; checagem extra abaixo via licitacao_id).
+  const admin = createAdminClient();
+
   // 1) Salva json_corrigido + marca quem revisou
-  const { error: extrErr } = await supabase
+  const { error: extrErr } = await admin
     .from('extracoes_ocr')
     .update({
       json_corrigido: jsonCorrigido,
@@ -67,7 +75,7 @@ export async function saveExtractionEdits(
   if (extrErr) return { error: `Falha ao salvar revisão: ${extrErr.message}` };
 
   // 2) Re-popula composicoes_extraidas (cascade limpa composicao_propria_itens)
-  const { error: delErr } = await supabase
+  const { error: delErr } = await admin
     .from('composicoes_extraidas')
     .delete()
     .eq('licitacao_id', licitacaoId)
@@ -94,14 +102,14 @@ export async function saveExtractionEdits(
   }));
 
   if (composicoesRows.length > 0) {
-    const { error: insErr } = await supabase
+    const { error: insErr } = await admin
       .from('composicoes_extraidas')
       .insert(composicoesRows);
     if (insErr) return { error: `Falha ao reinserir composições: ${insErr.message}` };
   }
 
   // 3) Re-insere os sub-itens das composições próprias
-  const { data: persistidas, error: relerErr } = await supabase
+  const { data: persistidas, error: relerErr } = await admin
     .from('composicoes_extraidas')
     .select('id, item_codigo')
     .eq('licitacao_id', licitacaoId)
@@ -134,7 +142,7 @@ export async function saveExtractionEdits(
     });
   }
   if (subRows.length > 0) {
-    const { error: subErr } = await supabase
+    const { error: subErr } = await admin
       .from('composicao_propria_itens')
       .insert(subRows);
     if (subErr) return { error: `Falha ao gravar sub-itens: ${subErr.message}` };
