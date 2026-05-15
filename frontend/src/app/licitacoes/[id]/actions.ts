@@ -161,6 +161,70 @@ export async function approveExtraction(
   return { ok: true };
 }
 
+export async function cadastrarNoOrcafascio(
+  licitacaoId: string,
+): Promise<ActionResult & {
+  grupo_descricao?: string;
+  composicoes_criadas?: number;
+  composicoes_puladas?: number;
+  itens_adicionados?: number;
+  warnings?: string[];
+}> {
+  const supabase = await createClient();
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return { error: 'Não autenticado.' };
+
+  // Pega a credencial Orçafascio ativa (auth_type='api')
+  const { data: creds, error: credErr } = await supabase
+    .from('api_credentials')
+    .select('id, metadata')
+    .eq('provider', 'orcafascio')
+    .eq('ativo', true);
+  if (credErr) return { error: `Falha ao listar credenciais: ${credErr.message}` };
+  const cred = (creds ?? []).find(
+    (c) => (c.metadata as { auth_type?: string } | null)?.auth_type === 'api',
+  );
+  if (!cred) {
+    return {
+      error: 'Nenhuma credencial Orçafascio com auth_type="api" cadastrada. Cadastre uma no Vault primeiro.',
+    };
+  }
+
+  const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/orcafascio-cadastrar-edital`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      licitacao_id: licitacaoId,
+      credential_id: cred.id,
+    }),
+  });
+  const text = await res.text();
+  let body: Record<string, unknown> = {};
+  try { body = JSON.parse(text); } catch {}
+
+  revalidatePath(`/licitacoes/${licitacaoId}`);
+
+  if (!res.ok) {
+    return {
+      error: `Cadastro falhou (${res.status}): ${(body.error as string) ?? text.slice(0, 200)}`,
+      details: body.details ?? null,
+    };
+  }
+
+  return {
+    ok: true,
+    grupo_descricao: body.grupo_descricao as string | undefined,
+    composicoes_criadas: body.composicoes_criadas as number | undefined,
+    composicoes_puladas: body.composicoes_puladas as number | undefined,
+    itens_adicionados: body.itens_adicionados as number | undefined,
+    warnings: body.warnings as string[] | undefined,
+  };
+}
+
 export async function resetToDraft(licitacaoId: string): Promise<ActionResult> {
   // Útil quando a extração falha: zerar pra rascunho e tentar de novo.
   const supabase = await createClient();
