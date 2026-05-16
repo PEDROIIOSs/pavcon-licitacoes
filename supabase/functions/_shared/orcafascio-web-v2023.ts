@@ -60,10 +60,13 @@ export type BudgetItem = BudgetItemPhase | BudgetItemComposition;
 
 export interface BasesInput {
   atualizar_composicoes?: boolean;
-  /** Cada banco com data + UF */
+  /** Cada banco. `estado` é opcional — só pra bancos com select de estado
+   * no form (SINAPI/SBC/SICRO3/SETOP/EMBASA). Outros (ORSE/SEINFRA/etc.)
+   * têm estado implícito; passar `estado` causa 500 no Orçafascio.
+   * `nome` é o ID exato no form (incluindo 'SICRO3' com o 3, não 'SICRO'). */
   bancos: Array<{
-    nome: 'SINAPI' | 'SBC' | 'SICRO' | 'ORSE' | 'SEINFRA' | 'FDE' | 'SUDECAP';
-    estado: string;     // UF
+    nome: string;
+    estado?: string;    // UF (só pra bancos com select de estado)
     data: string;       // mm/aaaa ex.: "03/2026"
     exibir_relatorio?: boolean;
     rounding_option?: number;
@@ -302,7 +305,11 @@ export async function updateBases(
   };
   for (const b of input.bancos) {
     data[`${b.nome}_exibir_relatorio`] = b.exibir_relatorio !== false ? '1' : '0';
-    data[`${b.nome}_estado`] = b.estado;
+    // Só envia _estado se foi fornecido — passar pra bancos sem select de
+    // estado (ORSE, SEINFRA, etc.) faz Orçafascio retornar 500.
+    if (b.estado) {
+      data[`${b.nome}_estado`] = b.estado;
+    }
     data[`${b.nome}_data`] = b.data;
     if (b.rounding_option != null) {
       data[`${b.nome}_rounding_option`] = String(b.rounding_option);

@@ -73,40 +73,60 @@ const ERR_AUTH_TO_HTTP: Record<OrcafascioWebError['code'], number> = {
   login_unexpected: 502,
 };
 
-// Cada banco do Orçafascio existe pra UMA UF específica (ou poucas). Sem
-// override, Orçafascio retorna 500 em update_bases se voce mandar uma UF
-// inválida pro banco.
-const BANCO_UF_PADRAO: Record<string, string> = {
-  ORSE: 'SE', // ORSE só existe pra Sergipe
-  SEINFRA: 'CE', // SEINFRA é do Ceará
-  SBC: 'SP', // SBC = Síntese Básica de Custos (São Paulo)
-  FDE: 'SP', // FDE = Fundação para o Desenvolvimento da Educação (São Paulo)
-  SUDECAP: 'MG', // SUDECAP = Belo Horizonte / MG
-  // SINAPI e SICRO existem em todas as UFs — usa a UF da licitação como fallback
+// Bancos suportados pelo Orçafascio /v2023/.../update_bases.
+// Inspeção do form real revelou:
+// - `has_state: true` → form tem select `{nome}_estado` (precisa enviar)
+// - `has_state: false` → estado implícito (NÃO mandar `_estado`, gera 500)
+// Nomes seguem EXATAMENTE o que aparece no form HTML (ex: 'SICRO3', não 'SICRO').
+const ORCAFASCIO_BANKS: Record<string, { has_state: boolean }> = {
+  SINAPI: { has_state: true },
+  SBC: { has_state: true },
+  SICRO3: { has_state: true },
+  SETOP: { has_state: true },
+  EMBASA: { has_state: true },
+  // Estado implícito (single-state ou regional)
+  SIURB: { has_state: false },
+  'SIURB INFRA': { has_state: false },
+  FDE: { has_state: false },
+  CPOS: { has_state: false },
+  EMOP: { has_state: false },
+  SCO: { has_state: false },
+  SUDECAP: { has_state: false },
+  IOPES: { has_state: false },
+  ORSE: { has_state: false },
+  SEINFRA: { has_state: false },
+  CAEMA: { has_state: false },
+  CAERN: { has_state: false },
+  COMPESA: { has_state: false },
+  AGESUL: { has_state: false },
+  'AGETOP CIVIL': { has_state: false },
+  'AGETOP RODOVIARIA': { has_state: false },
+  SEDOP: { has_state: false },
+  DERPR: { has_state: false },
 };
 
-// Mapeia código de banco da licitação pra data — convenção atual: usar
-// "data_base_descricao" do JSON extraído (ex.: "SINAPI PI 03/2026") pra inferir.
-// Como fallback, usa o mês corrente.
-function inferBaseData(cabecalho: Record<string, unknown> | null, banco: string): { estado: string; data: string } {
+// Extrai data MM/AAAA do data_base_descricao pra um banco específico.
+// Estado só é relevante pra bancos com `has_state: true` (SINAPI, SICRO3, etc.).
+function inferBaseData(
+  cabecalho: Record<string, unknown> | null,
+  banco: string,
+): { estado: string; data: string } {
   const desc = String(cabecalho?.data_base_descricao ?? '');
   const ufLicit = String(cabecalho?.uf ?? 'PI').toUpperCase().slice(0, 2);
-  // UF default: banco com UF fixa OU UF da licitação
-  const ufDefault = BANCO_UF_PADRAO[banco] ?? ufLicit;
-  // Tenta achar "SINAPI ... MM/AAAA" no string
-  const re = new RegExp(`${banco}[^\\d]*?([A-Z]{2})?[^\\d]*?(\\d{2}\\/\\d{4})`, 'i');
-  const m = desc.match(re);
-  if (m) {
-    // Banco com UF fixa (ORSE, SEINFRA, etc.) ignora UF extraída do texto —
-    // ela pode estar errada e quebrar a chamada.
-    const estado = BANCO_UF_PADRAO[banco] ?? (m[1] ?? ufLicit).toUpperCase();
-    return { estado, data: m[2] };
+  // Variantes do regex pra cobrir "SICRO3" sendo procurado como "SICRO" também
+  const variantes = [banco, banco.replace(/3$/, ''), banco + '3'];
+  for (const v of variantes) {
+    const re = new RegExp(`${v}[^\\d]*?([A-Z]{2})?[^\\d]*?(\\d{2}\\/\\d{4})`, 'i');
+    const m = desc.match(re);
+    if (m) {
+      return { estado: (m[1] ?? ufLicit).toUpperCase(), data: m[2] };
+    }
   }
   // Fallback: mês passado
   const now = new Date();
   const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const data = `${String(lastMonth.getMonth() + 1).padStart(2, '0')}/${lastMonth.getFullYear()}`;
-  return { estado: ufDefault, data };
+  return { estado: ufLicit, data };
 }
 
 Deno.serve(async (req: Request) => {
@@ -234,30 +254,46 @@ Deno.serve(async (req: Request) => {
     // é criar o budget + add items, que vem depois). Coletamos warnings.
     const warnings: string[] = [];
 
-    // Normaliza variantes: "SICRO3"→"SICRO", "SINAPI 2"→"SINAPI", etc.
-    // Orçafascio aceita só os nomes canônicos.
+    // Normaliza variantes pro nome canônico do Orçafascio.
+    // Ex: 'SICRO' → 'SICRO3' (Orçafascio usa SICRO3 oficial).
     function normalizeBanco(b: string): string {
       const u = b.toUpperCase().trim();
       if (u.startsWith('SINAPI')) return 'SINAPI';
-      if (u.startsWith('SICRO')) return 'SICRO';
+      if (u.startsWith('SICRO')) return 'SICRO3'; // SICRO ou SICRO3 → SICRO3
       if (u.startsWith('SEINFRA')) return 'SEINFRA';
       if (u.startsWith('ORSE')) return 'ORSE';
       if (u.startsWith('SBC')) return 'SBC';
       if (u.startsWith('FDE')) return 'FDE';
       if (u.startsWith('SUDECAP')) return 'SUDECAP';
+      if (u.startsWith('SETOP')) return 'SETOP';
+      if (u.startsWith('EMBASA')) return 'EMBASA';
+      if (u.startsWith('CPOS')) return 'CPOS';
+      if (u.startsWith('EMOP')) return 'EMOP';
+      if (u.startsWith('SCO')) return 'SCO';
+      if (u.startsWith('IOPES')) return 'IOPES';
+      if (u.startsWith('CAEMA')) return 'CAEMA';
+      if (u.startsWith('CAERN')) return 'CAERN';
+      if (u.startsWith('COMPESA')) return 'COMPESA';
+      if (u.startsWith('AGESUL')) return 'AGESUL';
+      if (u.startsWith('SEDOP')) return 'SEDOP';
+      if (u.startsWith('DERPR')) return 'DERPR';
+      if (u.startsWith('SIURB INFRA')) return 'SIURB INFRA';
+      if (u.startsWith('SIURB')) return 'SIURB';
+      if (u.startsWith('AGETOP CIVIL')) return 'AGETOP CIVIL';
+      if (u.startsWith('AGETOP RODOVIARIA')) return 'AGETOP RODOVIARIA';
       return u;
     }
-    const ALLOWED_BANCOS = ['SINAPI', 'SBC', 'SICRO', 'ORSE', 'SEINFRA', 'FDE', 'SUDECAP'];
     const bancos = Array.from(new Set(basesUtilizadas.map(normalizeBanco)))
-      .filter((b) => ALLOWED_BANCOS.includes(b))
-      .map((upper) => {
-        const { estado, data } = inferBaseData(
-          cabecalho,
-          upper as 'SINAPI' | 'SBC' | 'SICRO' | 'ORSE' | 'SEINFRA' | 'FDE' | 'SUDECAP',
-        );
+      .filter((b) => b in ORCAFASCIO_BANKS)
+      .map((nome) => {
+        const meta = ORCAFASCIO_BANKS[nome];
+        const { estado, data } = inferBaseData(cabecalho, nome);
+        // Só inclui `estado` se o banco tiver select de estado no form.
+        // Bancos com estado implícito (ORSE, SEINFRA, etc.) NÃO devem receber
+        // _estado — gera 500 no Orçafascio.
         return {
-          nome: upper as 'SINAPI' | 'SBC' | 'SICRO' | 'ORSE' | 'SEINFRA' | 'FDE' | 'SUDECAP',
-          estado,
+          nome,
+          ...(meta.has_state ? { estado } : {}),
           data,
           exibir_relatorio: true,
         };
