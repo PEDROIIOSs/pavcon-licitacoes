@@ -324,28 +324,43 @@ export function ExtractionPanel({
         </div>
       )}
 
-      {/* Cadastrar orçamento completo — disponível após cadastrar composições (fase1_concluida) */}
-      {(status === 'fase1_concluida' || status === 'criando_orcamento_base') && !orcamentoResult && (
-        <div className="space-y-3 rounded-md border border-purple-200 bg-purple-50 p-4">
-          <div>
-            <p className="text-sm font-medium text-purple-900">
-              🚀 Cadastrar orçamento completo no Orçafascio (automação 100%)
-            </p>
-            <p className="mt-1 text-xs text-purple-800">
-              Cria o orçamento no Orçafascio com cabeçalho, BDI, leis sociais e adiciona
-              todas as etapas + composições em batch único. Usa a API interna /v2023/
-              (cookie de sessão). Você só precisa abrir o link no fim pra revisar.
-            </p>
+      {/* Cadastrar orçamento completo — usa web auth (email+senha), funciona
+          já a partir de aguardando_revisao_humana. Permite pular o MyBase
+          (que exige secret_token de API e não é necessário pro fluxo principal). */}
+      {(status === 'aguardando_revisao_humana' ||
+        status === 'criando_composicoes_edital' ||
+        status === 'fase1_concluida' ||
+        status === 'criando_orcamento_base') &&
+        !orcamentoResult && (
+          <div className="space-y-3 rounded-md border border-purple-200 bg-purple-50 p-4">
+            <div>
+              <p className="text-sm font-medium text-purple-900">
+                🚀 Cadastrar orçamento completo no Orçafascio (automação 100%)
+              </p>
+              <p className="mt-1 text-xs text-purple-800">
+                Cria o orçamento no Orçafascio com cabeçalho, BDI, leis sociais e adiciona
+                todas as etapas + composições em batch único. Usa a API interna /v2023/
+                (cookie de sessão, email+senha). Você só precisa abrir o link no fim
+                pra revisar.
+              </p>
+              {status === 'aguardando_revisao_humana' && (
+                <p className="mt-2 rounded bg-amber-100 px-2 py-1 text-[11px] text-amber-900">
+                  ⚠ Sem passar pelo MyBase: composições próprias (PROPRIA) vão pro
+                  orçamento sem o ID da pasta. Se o Orçafascio rejeitar, você pode
+                  cadastrá-las manualmente no MyBase antes ou pegar um secret_token
+                  de API.
+                </p>
+              )}
+            </div>
+            <button
+              onClick={handleCadastrarOrcamentoCompleto}
+              disabled={isPending}
+              className="rounded-md bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50"
+            >
+              {isPending ? 'Cadastrando…' : '🚀 Cadastrar orçamento completo'}
+            </button>
           </div>
-          <button
-            onClick={handleCadastrarOrcamentoCompleto}
-            disabled={isPending}
-            className="rounded-md bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50"
-          >
-            {isPending ? 'Cadastrando…' : '🚀 Cadastrar orçamento completo'}
-          </button>
-        </div>
-      )}
+        )}
 
       {orcamentoResult && (
         <div className="space-y-2 rounded-md border border-emerald-300 bg-emerald-50 p-4 text-sm">
