@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { signOut } from '../login/actions';
 import { formatBRL, formatDate, statusColor, statusLabel } from '@/lib/utils';
+import { isAdmin } from '@/lib/auth';
 import Link from 'next/link';
 
 export const metadata = { title: 'Painel — Pavcon Orçamentos' };
@@ -29,7 +30,12 @@ interface DashboardRow {
   aguarda_acao_humana: boolean;
 }
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
+  const params = await searchParams;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
@@ -49,18 +55,33 @@ export default async function DashboardPage() {
               {user?.email ?? '—'}
             </p>
           </div>
-          <form action={signOut}>
-            <button
-              type="submit"
-              className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
-            >
-              Sair
-            </button>
-          </form>
+          <div className="flex items-center gap-2">
+            {isAdmin(user?.email) && (
+              <Link
+                href="/dashboard/usuarios"
+                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
+              >
+                Usuários
+              </Link>
+            )}
+            <form action={signOut}>
+              <button
+                type="submit"
+                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
+              >
+                Sair
+              </button>
+            </form>
+          </div>
         </div>
       </header>
 
       <main className="mx-auto max-w-7xl px-6 py-8">
+        {params.error && (
+          <div className="mb-6 rounded-md bg-red-50 p-3 text-sm text-red-800">
+            {decodeURIComponent(params.error)}
+          </div>
+        )}
         <div className="mb-6 flex items-center justify-between">
           <h2 className="text-xl font-semibold text-zinc-900">Orçamentos</h2>
           <Link
