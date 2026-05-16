@@ -3,6 +3,7 @@ import { formatBRL, formatDate, statusColor, statusLabel } from '@/lib/utils';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ExtractionPanel } from './extraction-panel';
+import { PollRefresher } from './poll-refresher';
 import type { ExtractedItem } from './actions';
 
 export const metadata = { title: 'Orçamento — Pavcon' };
@@ -174,9 +175,3 @@ export default async function LicitacaoDetailPage({
   );
 }
 
-// Recarrega a página a cada 4s quando há trabalho em andamento.
-function PollRefresher() {
-  return (
-    <meta httpEquiv="refresh" content="4" />
-  );
-}
