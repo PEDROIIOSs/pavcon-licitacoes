@@ -194,7 +194,11 @@ Deno.serve(async (req: Request) => {
     const ctx = await createContext(admin, session, credentialId, user.id, licitacaoId, traceId);
 
     // ---- 4) Cria o budget ----------------------------------------------------
-    const codigo = (licitacao.municipio ?? 'OBRA').slice(0, 50);
+    // Codigo precisa ser único — adiciona suffix com data+hora pra evitar conflito
+    // de unicidade no Orçafascio (caso o orçamentista crie múltiplos pra mesma obra).
+    const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    const baseCod = (licitacao.municipio ?? 'OBRA').toUpperCase().slice(0, 30);
+    const codigo = `${baseCod} ${stamp}`.slice(0, 50);
     const descricao = (licitacao.titulo ?? 'Orçamento gerado pelo bot').slice(0, 250);
 
     const { budget_id } = await createBudget(ctx, {
