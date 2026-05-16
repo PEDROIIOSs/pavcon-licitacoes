@@ -286,9 +286,35 @@ export async function importarExtracaoManual(
     return { error: 'Suba pelo menos um arquivo antes de importar o JSON.' };
   }
 
-  // Limpa extrações antigas dessa licitação
-  await admin.from('extracoes_ocr').delete().eq('licitacao_id', licitacaoId);
-  console.log('[importar] cleared old extracoes', { ms: Date.now() - t0 });
+  // Limpa extrações antigas — ORDEM IMPORTA porque composicoes_extraidas
+  // referencia extracoes_ocr com NO ACTION (não CASCADE). Apagar composicoes
+  // primeiro também CASCADE-deleta composicao_propria_itens.
+  // Sem isso, a DELETE em extracoes_ocr falha com FK 23503 e a action segue
+  // ignorando o erro → INSERT em composicoes_extraidas colide com UNIQUE
+  // (licitacao_id, item_codigo) → ação fica em loop/timeout silencioso.
+  const { error: delCompsErr } = await admin
+    .from('composicoes_extraidas')
+    .delete()
+    .eq('licitacao_id', licitacaoId);
+  if (delCompsErr) {
+    console.error('[importar] delete composicoes_extraidas FAILED', delCompsErr);
+    return {
+      error: `Falha ao limpar composições antigas: ${delCompsErr.message}`,
+    };
+  }
+  const { error: delExtrErr } = await admin
+    .from('extracoes_ocr')
+    .delete()
+    .eq('licitacao_id', licitacaoId);
+  if (delExtrErr) {
+    console.error('[importar] delete extracoes_ocr FAILED', delExtrErr);
+    return {
+      error: `Falha ao limpar extrações antigas: ${delExtrErr.message}`,
+    };
+  }
+  console.log('[importar] cleared old extracoes + composicoes', {
+    ms: Date.now() - t0,
+  });
 
   // Cria extração
   const meta = SOURCE_LABELS[source] ?? SOURCE_LABELS.outro;
