@@ -3,7 +3,7 @@ import { requireAdmin, isAdmin } from '@/lib/auth';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { formatDate } from '@/lib/utils';
 import { CreateUserForm } from './create-form';
-import { deleteUser } from './actions';
+import { RowActions } from './row-actions';
 
 export const metadata = { title: 'Usuários — Pavcon' };
 export const dynamic = 'force-dynamic';
@@ -15,6 +15,7 @@ export default async function UsuariosPage({
     error?: string;
     created?: string;
     deleted?: string;
+    password_changed?: string;
   }>;
 }) {
   const me = await requireAdmin();
@@ -61,6 +62,11 @@ export default async function UsuariosPage({
             Usuário removido.
           </div>
         )}
+        {params.password_changed && (
+          <div className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-800">
+            Senha alterada com sucesso.
+          </div>
+        )}
 
         <section className="rounded-lg border border-zinc-200 bg-white p-6">
           <h2 className="text-base font-semibold text-zinc-900">
@@ -93,7 +99,7 @@ export default async function UsuariosPage({
                   <Th>Papel</Th>
                   <Th>Criado em</Th>
                   <Th>Último login</Th>
-                  <Th>{''}</Th>
+                  <Th className="text-right">Ações</Th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-200">
@@ -127,18 +133,12 @@ export default async function UsuariosPage({
                       <td className="px-4 py-3 align-top text-zinc-500">
                         {u.last_sign_in_at ? formatDate(u.last_sign_in_at) : '—'}
                       </td>
-                      <td className="px-4 py-3 align-top text-right">
-                        {!isMe && (
-                          <form action={deleteUser} className="inline">
-                            <input type="hidden" name="userId" value={u.id} />
-                            <button
-                              type="submit"
-                              className="text-xs font-medium text-red-700 hover:underline"
-                            >
-                              Remover
-                            </button>
-                          </form>
-                        )}
+                      <td className="px-4 py-3 align-top">
+                        <RowActions
+                          userId={u.id}
+                          email={u.email ?? ''}
+                          isMe={isMe}
+                        />
                       </td>
                     </tr>
                   );
@@ -152,9 +152,17 @@ export default async function UsuariosPage({
   );
 }
 
-function Th({ children }: { children: React.ReactNode }) {
+function Th({
+  children,
+  className = '',
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
-    <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500">
+    <th
+      className={`px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 ${className}`}
+    >
       {children}
     </th>
   );

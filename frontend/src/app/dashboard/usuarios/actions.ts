@@ -38,6 +38,34 @@ export async function createUser(formData: FormData) {
   redirect(`/dashboard/usuarios?created=${encodeURIComponent(email)}`);
 }
 
+export async function updateUserPassword(formData: FormData) {
+  await requireAdmin();
+
+  const userId = String(formData.get('userId') ?? '');
+  const password = String(formData.get('password') ?? '');
+
+  if (!userId) {
+    redirect(
+      `/dashboard/usuarios?error=${encodeURIComponent('userId ausente')}`,
+    );
+  }
+  if (password.length < 8) {
+    redirect(
+      `/dashboard/usuarios?error=${encodeURIComponent('Senha precisa ter pelo menos 8 caracteres')}`,
+    );
+  }
+
+  const admin = createAdminClient();
+  const { error } = await admin.auth.admin.updateUserById(userId, { password });
+  if (error) {
+    redirect(
+      `/dashboard/usuarios?error=${encodeURIComponent(error.message)}`,
+    );
+  }
+  revalidatePath('/dashboard/usuarios');
+  redirect('/dashboard/usuarios?password_changed=1');
+}
+
 export async function deleteUser(formData: FormData) {
   const me = await requireAdmin();
   const userId = String(formData.get('userId') ?? '');
