@@ -153,8 +153,13 @@ async function postForm<T = unknown>(
   const url = path.startsWith('http') ? path : `${BASE}${path}`;
   const startedAt = Date.now();
 
-  // Sempre injetar o CSRF token
-  const body = new URLSearchParams({ authenticity_token: ctx.csrfToken, ...formData });
+  // Rails espera `utf8=✓` (force-encoding marker) E o authenticity_token.
+  // Sem o utf8, alguns controllers (incl. update_bases) retornam 500 silencioso.
+  const body = new URLSearchParams({
+    utf8: '✓',
+    authenticity_token: ctx.csrfToken,
+    ...formData,
+  });
 
   const response = await fetch(url, {
     method: 'POST',
@@ -294,27 +299,99 @@ export async function updateLeisSociais(
   );
 }
 
-/** Atualiza bases (bancos de referência: SINAPI/SICRO/ORSE/...). */
+/** Lê o form de bases (GET na página do orçamento) e devolve o valor padrão
+ * (option SELECTED ou primeira option) de cada `{banco}_data` e `{banco}_estado`.
+ * É preciso enviar o form COMPLETO pra updateBases — mandar só alguns campos
+ * faz o Rails crashar com 500 (controller itera sobre todos os bancos
+ * conhecidos e quebra se faltar param). */
+async function fetchBasesFormDefaults(
+  ctx: OpContext,
+  budgetId: string,
+): Promise<{ banks: string[]; defaults: Record<string, { data?: string; estado?: string }> }> {
+  const r = await fetch(`${BASE}/orc/orcamentos/${budgetId}`, {
+    method: 'GET',
+    headers: {
+      Cookie: ctx.session.cookie_header,
+      'User-Agent': 'pavcon-licitacoes/0.1 (Edge Function)',
+      Accept: 'text/html',
+    },
+    redirect: 'manual',
+  });
+  const html = await r.text();
+  // Extrai o form id="my_form" (form de bases)
+  const m = html.match(/<form\s+id="my_form"[\s\S]*?<\/form>/);
+  if (!m) {
+    throw new OrcafascioV2023Error(
+      r.status,
+      'Form id="my_form" não encontrado na página do orçamento — não dá pra ler defaults dos bancos.',
+      { excerpt: html.slice(0, 300) },
+    );
+  }
+  const form = m[0];
+  const banks = new Set<string>();
+  const defaults: Record<string, { data?: string; estado?: string }> = {};
+  // Itera por cada <select name="{algo}_data" ou {algo}_estado">
+  const selectRe = /<select[^>]+name="([^"]+?)_(data|estado)"[^>]*>([\s\S]*?)<\/select>/g;
+  let sm: RegExpExecArray | null;
+  while ((sm = selectRe.exec(form)) !== null) {
+    const bank = sm[1];
+    const field = sm[2] as 'data' | 'estado';
+    const optionsHtml = sm[3];
+    // Pega option com selected, senão o primeiro
+    const selectedMatch = optionsHtml.match(/<option[^>]*value="([^"]+)"[^>]*selected/);
+    const firstMatch = optionsHtml.match(/<option[^>]*value="([^"]+)"/);
+    const value = selectedMatch?.[1] ?? firstMatch?.[1];
+    if (!value) continue;
+    banks.add(bank);
+    if (!defaults[bank]) defaults[bank] = {};
+    defaults[bank][field] = value;
+  }
+  // Tambem coleta nomes dos bancos via checkboxes (caso algum banco só tenha relatorio)
+  const cbRe = /<input[^>]+type="checkbox"[^>]+name="([^"]+?)_exibir_relatorio"/g;
+  while ((sm = cbRe.exec(form)) !== null) {
+    banks.add(sm[1]);
+  }
+  return { banks: Array.from(banks), defaults };
+}
+
+/** Atualiza bases (bancos de referência: SINAPI/SICRO3/ORSE/...).
+ * Faz GET no orçamento pra ler defaults de todos os bancos, e MERGE com
+ * os overrides em `input.bancos`. Submete o form COMPLETO (~70 campos) —
+ * Orçafascio retorna 500 se receber só parte dos bancos. */
 export async function updateBases(
   ctx: OpContext,
   budgetId: string,
   input: BasesInput,
 ): Promise<void> {
+  const { banks: allBanks, defaults } = await fetchBasesFormDefaults(ctx, budgetId);
+
+  const overridesByName = new Map<string, BasesInput['bancos'][number]>();
+  for (const b of input.bancos) overridesByName.set(b.nome, b);
+
   const data: Record<string, string> = {
-    atualizar_composicoes: input.atualizar_composicoes !== false ? '1' : '0',
+    // Radio com valor JSON-stringified (não 1/0). Default: atualiza tudo.
+    atualizar_composicoes: input.atualizar_composicoes !== false
+      ? '{"atualizar_comp":true,"atualizar_ins":true}'
+      : '{"atualizar_comp":false,"atualizar_ins":false}',
   };
-  for (const b of input.bancos) {
-    data[`${b.nome}_exibir_relatorio`] = b.exibir_relatorio !== false ? '1' : '0';
-    // Só envia _estado se foi fornecido — passar pra bancos sem select de
-    // estado (ORSE, SEINFRA, etc.) faz Orçafascio retornar 500.
-    if (b.estado) {
-      data[`${b.nome}_estado`] = b.estado;
-    }
-    data[`${b.nome}_data`] = b.data;
-    if (b.rounding_option != null) {
-      data[`${b.nome}_rounding_option`] = String(b.rounding_option);
+  for (const bank of allBanks) {
+    const override = overridesByName.get(bank);
+    const def = defaults[bank] ?? {};
+    // exibir_relatorio: true pros bancos que o user pediu, false pros outros
+    data[`${bank}_exibir_relatorio`] = override
+      ? override.exibir_relatorio !== false ? 'true' : 'false'
+      : 'false';
+    // estado: usa override se tiver, senão default do form (só se o select existe)
+    const estado = override?.estado ?? def.estado;
+    if (estado) data[`${bank}_estado`] = estado;
+    // data: usa override se tiver, senão default do form
+    const dataValue = override?.data ?? def.data;
+    if (dataValue) data[`${bank}_data`] = dataValue;
+    if (override?.rounding_option != null) {
+      data[`${bank}_rounding_option`] = String(override.rounding_option);
     }
   }
+
   await postForm(
     ctx,
     `/v2023/bud/budgets/${budgetId}/update_bases`,

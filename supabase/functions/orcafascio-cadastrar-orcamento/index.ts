@@ -299,36 +299,18 @@ Deno.serve(async (req: Request) => {
         };
       });
     if (bancos.length > 0) {
-      // 1ª tentativa: todos os bancos juntos, SEM atualizar_composicoes (que
-      // dispara reprocessamento server-side e às vezes crasha com 500).
-      // 2ª tentativa: um banco por vez, se a 1ª falhou (isola bancos problemáticos).
-      let basesOk = false;
+      // updateBases agora lê os defaults do form (todos os ~23 bancos) e
+      // faz merge com os que queremos sobrescrever. Rails exige form completo.
       try {
         await updateBases(ctx, budget_id, {
           bancos,
-          atualizar_composicoes: false,
+          atualizar_composicoes: true,
         });
-        basesOk = true;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         warnings.push(
-          `updateBases (batch) falhou — tentando um banco por vez: ${msg.slice(0, 100)}`,
+          `updateBases falhou (configurar manualmente no Orçafascio): ${msg.slice(0, 150)}`,
         );
-      }
-      if (!basesOk) {
-        for (const b of bancos) {
-          try {
-            await updateBases(ctx, budget_id, {
-              bancos: [b],
-              atualizar_composicoes: false,
-            });
-          } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            warnings.push(
-              `updateBases (${b.nome} ${b.estado} ${b.data}) falhou: ${msg.slice(0, 100)}`,
-            );
-          }
-        }
       }
     }
 
