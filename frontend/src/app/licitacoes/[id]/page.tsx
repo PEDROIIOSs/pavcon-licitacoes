@@ -49,6 +49,25 @@ export default async function LicitacaoDetailPage({
   const extracoes = extrResp.data ?? [];
   const ultimaExtracao = extracoes[0];
 
+  // Soma do orçamento extraído: sem BDI, com BDI, e o BDI em si.
+  // Só conta linhas tipo 'servico' pra não duplicar com grupos agregadores.
+  const { data: linhasFinanceiras } = await supabase
+    .from('composicoes_extraidas')
+    .select('preco_total, preco_unitario_sem_bdi, quantidade')
+    .eq('licitacao_id', id)
+    .eq('tipo_linha', 'servico');
+
+  let totalComBdi = 0;
+  let totalSemBdi = 0;
+  for (const l of linhasFinanceiras ?? []) {
+    if (l.preco_total != null) totalComBdi += Number(l.preco_total);
+    if (l.preco_unitario_sem_bdi != null && l.quantidade != null) {
+      totalSemBdi += Number(l.preco_unitario_sem_bdi) * Number(l.quantidade);
+    }
+  }
+  const totalBdi = totalComBdi - totalSemBdi;
+  const temTotal = (linhasFinanceiras?.length ?? 0) > 0 && totalComBdi > 0;
+
   // Signed URLs dos PDFs pra extração manual (NotebookLM/Claude).
   // TTL de 1h é suficiente pra usuário baixar e arrastar pra ferramenta externa.
   const arquivosComUrl = await Promise.all(
@@ -120,6 +139,62 @@ export default async function LicitacaoDetailPage({
             </ul>
           )}
         </section>
+
+        {temTotal && (
+          <section className="rounded-lg border border-zinc-200 bg-white p-6">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-sm font-semibold text-zinc-900">
+                  Total do orçamento (extraído)
+                </h2>
+                <p className="mt-0.5 text-xs text-zinc-500">
+                  Soma dos itens (tipo serviço). Use pra validar contra a planilha do edital.
+                </p>
+              </div>
+              <div className="text-right">
+                <div className="text-2xl font-semibold text-zinc-900">
+                  {formatBRL(totalComBdi)}
+                </div>
+                <div className="text-xs text-zinc-500">Total geral (com BDI)</div>
+              </div>
+            </div>
+            <dl className="mt-4 grid grid-cols-3 gap-4 border-t border-zinc-100 pt-4 text-sm">
+              <div>
+                <dt className="text-xs text-zinc-500">Total sem BDI</dt>
+                <dd className="mt-0.5 font-medium text-zinc-900">
+                  {formatBRL(totalSemBdi)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-zinc-500">
+                  BDI{' '}
+                  {totalSemBdi > 0 && (
+                    <span className="text-zinc-400">
+                      ({((totalBdi / totalSemBdi) * 100).toFixed(2)}%)
+                    </span>
+                  )}
+                </dt>
+                <dd className="mt-0.5 font-medium text-zinc-900">
+                  {formatBRL(totalBdi)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-zinc-500">Linhas (servicos)</dt>
+                <dd className="mt-0.5 font-medium text-zinc-900">
+                  {linhasFinanceiras?.length ?? 0}
+                </dd>
+              </div>
+            </dl>
+            {licitacao.valor_total_edital != null &&
+              Math.abs(totalComBdi - Number(licitacao.valor_total_edital)) > 0.01 && (
+                <p className="mt-3 rounded bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  ⚠ Total extraído ({formatBRL(totalComBdi)}) difere do valor de referência do
+                  edital ({formatBRL(Number(licitacao.valor_total_edital))}) em{' '}
+                  {formatBRL(totalComBdi - Number(licitacao.valor_total_edital))}.
+                </p>
+              )}
+          </section>
+        )}
 
         <ExtractionPanel
           licitacaoId={licitacao.id}
