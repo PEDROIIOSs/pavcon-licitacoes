@@ -133,7 +133,7 @@ export default async function LicitacaoDetailPage({
             <h2 className="text-sm font-semibold text-red-900">Erro na extração</h2>
             <p className="mt-2 text-sm text-red-800">{ultimaExtracao.erro_detalhe}</p>
             <p className="mt-2 text-xs text-red-700">
-              Use o botão <strong>"Voltar pra rascunho"</strong> e tente novamente.
+              Use o botão <strong>&ldquo;Voltar pra rascunho&rdquo;</strong> e tente novamente.
             </p>
           </section>
         )}
