@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server';
 import { signOut } from '../login/actions';
 import { formatBRL, formatDate, statusColor, statusLabel } from '@/lib/utils';
 import { isAdmin } from '@/lib/auth';
+import { RowActions } from './row-actions';
 import Link from 'next/link';
 
 export const metadata = { title: 'Painel — Pavcon Orçamentos' };
@@ -33,17 +34,40 @@ interface DashboardRow {
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; deleted?: string }>;
 }) {
   const params = await searchParams;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
+  const userIsAdmin = isAdmin(user?.email);
 
   const { data: licitacoes, error } = await supabase
     .from('vw_dashboard_licitacoes')
     .select('*')
     .order('created_at', { ascending: false })
     .returns<DashboardRow[]>();
+
+  // Soma do preco_total das composições extraídas (só linhas tipo "servico",
+  // pra não duplicar com grupos agregadores). Permite validar se o total
+  // bate com o orçamento referência do edital.
+  const ids = (licitacoes ?? []).map((l) => l.id);
+  const { data: precos } = ids.length
+    ? await supabase
+        .from('composicoes_extraidas')
+        .select('licitacao_id, preco_total')
+        .in('licitacao_id', ids)
+        .eq('tipo_linha', 'servico')
+    : { data: [] };
+  const totalExtraidoByLic = new Map<string, number>();
+  (precos ?? []).forEach((row) => {
+    if (row.preco_total != null) {
+      totalExtraidoByLic.set(
+        row.licitacao_id as string,
+        (totalExtraidoByLic.get(row.licitacao_id as string) ?? 0) +
+          Number(row.preco_total),
+      );
+    }
+  });
 
   return (
     <div className="min-h-screen">
@@ -56,7 +80,7 @@ export default async function DashboardPage({
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {isAdmin(user?.email) && (
+            {userIsAdmin && (
               <Link
                 href="/dashboard/usuarios"
                 className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
@@ -80,6 +104,11 @@ export default async function DashboardPage({
         {params.error && (
           <div className="mb-6 rounded-md bg-red-50 p-3 text-sm text-red-800">
             {decodeURIComponent(params.error)}
+          </div>
+        )}
+        {params.deleted && (
+          <div className="mb-6 rounded-md bg-emerald-50 p-3 text-sm text-emerald-800">
+            Licitação removida.
           </div>
         )}
         <div className="mb-6 flex items-center justify-between">
@@ -114,51 +143,84 @@ export default async function DashboardPage({
                   <Th>Título / Edital</Th>
                   <Th>Órgão</Th>
                   <Th>Status</Th>
-                  <Th>Valor referência</Th>
+                  <Th>Valor extraído</Th>
                   <Th>Itens</Th>
                   <Th>Criada em</Th>
+                  {userIsAdmin && <Th className="text-right">Ações</Th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-200">
-                {licitacoes.map((l) => (
-                  <tr key={l.id} className="hover:bg-zinc-50">
-                    <td className="px-4 py-3 align-top">
-                      <Link href={`/licitacoes/${l.id}`} className="font-medium text-zinc-900 hover:underline">
-                        {l.titulo}
-                      </Link>
-                      {l.numero_edital && (
-                        <div className="text-xs text-zinc-500">{l.numero_edital}</div>
+                {licitacoes.map((l) => {
+                  const valorExtraido = totalExtraidoByLic.get(l.id) ?? null;
+                  const valorRef = l.valor_total_edital;
+                  const diff =
+                    valorExtraido != null && valorRef != null
+                      ? valorExtraido - valorRef
+                      : null;
+                  return (
+                    <tr key={l.id} className="hover:bg-zinc-50">
+                      <td className="px-4 py-3 align-top">
+                        <Link href={`/licitacoes/${l.id}`} className="font-medium text-zinc-900 hover:underline">
+                          {l.titulo}
+                        </Link>
+                        {l.numero_edital && (
+                          <div className="text-xs text-zinc-500">{l.numero_edital}</div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 align-top text-zinc-700">
+                        {l.orgao_licitante ?? '—'}
+                        {l.municipio && (
+                          <div className="text-xs text-zinc-500">
+                            {l.municipio}{l.uf ? `/${l.uf}` : ''}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 align-top">
+                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${statusColor(l.status)}`}>
+                          {statusLabel(l.status)}
+                        </span>
+                        {l.aguarda_acao_humana && (
+                          <div className="mt-1 text-xs font-medium text-blue-700">
+                            ⚠ aguarda você
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 align-top text-zinc-700">
+                        {valorExtraido != null ? (
+                          <>
+                            <div className="font-medium">{formatBRL(valorExtraido)}</div>
+                            {valorRef != null && (
+                              <div className="text-xs text-zinc-500">
+                                ref: {formatBRL(valorRef)}
+                                {diff != null && Math.abs(diff) > 0.01 && (
+                                  <span
+                                    className={`ml-1 ${diff > 0 ? 'text-amber-700' : 'text-red-700'}`}
+                                  >
+                                    ({diff > 0 ? '+' : ''}
+                                    {formatBRL(diff)})
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                      <td className="px-4 py-3 align-top text-zinc-700">
+                        {l.qtd_itens_extraidos > 0 ? l.qtd_itens_extraidos : '—'}
+                      </td>
+                      <td className="px-4 py-3 align-top text-zinc-500">
+                        {formatDate(l.created_at)}
+                      </td>
+                      {userIsAdmin && (
+                        <td className="px-4 py-3 align-top text-right">
+                          <RowActions licitacaoId={l.id} titulo={l.titulo} />
+                        </td>
                       )}
-                    </td>
-                    <td className="px-4 py-3 align-top text-zinc-700">
-                      {l.orgao_licitante ?? '—'}
-                      {l.municipio && (
-                        <div className="text-xs text-zinc-500">
-                          {l.municipio}{l.uf ? `/${l.uf}` : ''}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 align-top">
-                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${statusColor(l.status)}`}>
-                        {statusLabel(l.status)}
-                      </span>
-                      {l.aguarda_acao_humana && (
-                        <div className="mt-1 text-xs font-medium text-blue-700">
-                          ⚠ aguarda você
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 align-top text-zinc-700">
-                      {formatBRL(l.valor_total_edital)}
-                    </td>
-                    <td className="px-4 py-3 align-top text-zinc-700">
-                      {l.qtd_itens_extraidos > 0 ? l.qtd_itens_extraidos : '—'}
-                    </td>
-                    <td className="px-4 py-3 align-top text-zinc-500">
-                      {formatDate(l.created_at)}
-                    </td>
-                  </tr>
-                ))}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -168,9 +230,17 @@ export default async function DashboardPage({
   );
 }
 
-function Th({ children }: { children: React.ReactNode }) {
+function Th({
+  children,
+  className = '',
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
-    <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500">
+    <th
+      className={`px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 ${className}`}
+    >
       {children}
     </th>
   );
