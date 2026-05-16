@@ -1,9 +1,12 @@
 // Leitura centralizada de env vars com fail-fast e mensagem útil.
 // Evita 500 silencioso (MIDDLEWARE_INVOCATION_FAILED) quando a var falta na Vercel.
 //
-// IMPORTANTE: as leituras `NEXT_PUBLIC_*` precisam ser LITERAIS
-// (`process.env.NEXT_PUBLIC_X`) pra que o Next.js as inline no bundle do
-// browser em build-time. Acesso dinâmico (`process.env[name]`) NÃO é inline.
+// IMPORTANTE:
+// 1. As leituras `NEXT_PUBLIC_*` precisam ser LITERAIS (`process.env.NEXT_PUBLIC_X`)
+//    pra que o Next.js as inline no bundle do browser em build-time.
+// 2. Todos os campos são getters (lazy). Assim, se uma var faltar, o throw acontece
+//    no ponto de USO (capturável pelo try/catch do proxy), não no import do módulo
+//    (que derrubaria o handler inteiro com MIDDLEWARE_INVOCATION_FAILED genérico).
 
 function ensure(name: string, value: string | undefined): string {
   if (!value) {
@@ -17,16 +20,18 @@ function ensure(name: string, value: string | undefined): string {
 }
 
 export const env = {
-  NEXT_PUBLIC_SUPABASE_URL: ensure(
-    'NEXT_PUBLIC_SUPABASE_URL',
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-  ),
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: ensure(
-    'NEXT_PUBLIC_SUPABASE_ANON_KEY',
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-  ),
-  // Server-only — getter lazy pra não quebrar bundle em código client que
-  // importe `env` por engano (o valor só é lido quando alguém acessa).
+  get NEXT_PUBLIC_SUPABASE_URL() {
+    return ensure(
+      'NEXT_PUBLIC_SUPABASE_URL',
+      process.env.NEXT_PUBLIC_SUPABASE_URL,
+    );
+  },
+  get NEXT_PUBLIC_SUPABASE_ANON_KEY() {
+    return ensure(
+      'NEXT_PUBLIC_SUPABASE_ANON_KEY',
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    );
+  },
   get SUPABASE_SERVICE_ROLE_KEY() {
     return ensure(
       'SUPABASE_SERVICE_ROLE_KEY',
