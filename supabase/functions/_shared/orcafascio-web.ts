@@ -294,7 +294,8 @@ export async function authenticateOrcafascioWeb(
   // 2) Login real
   const password = await readSecret(admin, credential.vault_secret_id);
   const fieldEmail = credential.metadata!.field_email ?? 'email';
-  const fieldPassword = credential.metadata!.field_password ?? 'password';
+  // O form do Orçafascio usa "senha" (português), não "password".
+  const fieldPassword = credential.metadata!.field_password ?? 'senha';
 
   let attempt: LoginAttempt;
   try {
