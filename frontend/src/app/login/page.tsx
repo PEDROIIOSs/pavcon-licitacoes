@@ -5,7 +5,12 @@ export const metadata = { title: 'Entrar — Pavcon Licitações' };
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ next?: string; sent?: string; error?: string }>;
+  searchParams: Promise<{
+    next?: string;
+    reset_sent?: string;
+    reset_ok?: string;
+    error?: string;
+  }>;
 }) {
   const params = await searchParams;
   return (
@@ -13,12 +18,17 @@ export default async function LoginPage({
       <div className="w-full max-w-md rounded-xl border border-zinc-200 bg-white p-8 shadow-sm">
         <h1 className="text-2xl font-semibold text-zinc-900">Pavcon Licitações</h1>
         <p className="mt-1 text-sm text-zinc-500">
-          Entre com seu email institucional. Você vai receber um link de acesso.
+          Entre com seu email e senha.
         </p>
 
-        {params.sent && (
+        {params.reset_sent && (
           <div className="mt-4 rounded-md bg-emerald-50 p-3 text-sm text-emerald-800">
-            Link enviado. Confira sua caixa de entrada.
+            Se o email existir, você vai receber um link pra redefinir a senha.
+          </div>
+        )}
+        {params.reset_ok && (
+          <div className="mt-4 rounded-md bg-emerald-50 p-3 text-sm text-emerald-800">
+            Senha redefinida. Entre com a nova senha.
           </div>
         )}
         {params.error && (
