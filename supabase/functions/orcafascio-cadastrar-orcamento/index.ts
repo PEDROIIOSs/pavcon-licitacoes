@@ -208,7 +208,11 @@ Deno.serve(async (req: Request) => {
       rounding_option: 1,
     });
 
-    // ---- 5) Configura bancos -------------------------------------------------
+    // ---- 5/6/7) Configurações best-effort ------------------------------------
+    // Essas chamadas podem falhar individualmente sem matar o fluxo (o crítico
+    // é criar o budget + add items, que vem depois). Coletamos warnings.
+    const warnings: string[] = [];
+
     const bancos = basesUtilizadas
       .filter((b) => ['SINAPI', 'SBC', 'SICRO', 'ORSE', 'SEINFRA', 'FDE', 'SUDECAP'].includes(b.toUpperCase()))
       .map((b) => {
@@ -217,18 +221,29 @@ Deno.serve(async (req: Request) => {
         return { nome: upper, estado, data, exibir_relatorio: true };
       });
     if (bancos.length > 0) {
-      await updateBases(ctx, budget_id, { bancos, atualizar_composicoes: true });
+      try {
+        await updateBases(ctx, budget_id, { bancos, atualizar_composicoes: true });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        warnings.push(`updateBases falhou (configurar manualmente no Orçafascio): ${msg.slice(0, 150)}`);
+      }
     }
 
-    // ---- 6) BDI --------------------------------------------------------------
-    await updateBdi(ctx, budget_id, { bdi_manual: bdiPct, no_final: true });
+    try {
+      await updateBdi(ctx, budget_id, { bdi_manual: bdiPct, no_final: true });
+    } catch (e) {
+      warnings.push(`updateBdi falhou: ${e instanceof Error ? e.message.slice(0, 150) : String(e)}`);
+    }
 
-    // ---- 7) Leis sociais -----------------------------------------------------
-    await updateLeisSociais(ctx, budget_id, {
-      desonerado: comDesoneracao,
-      charge_hourly: leisHorista,
-      charge_monthly: leisHorista * 0.629, // razão típica horista→mensalista (71.59/113.78)
-    });
+    try {
+      await updateLeisSociais(ctx, budget_id, {
+        desonerado: comDesoneracao,
+        charge_hourly: leisHorista,
+        charge_monthly: leisHorista * 0.629, // razão típica horista→mensalista (71.59/113.78)
+      });
+    } catch (e) {
+      warnings.push(`updateLeisSociais falhou: ${e instanceof Error ? e.message.slice(0, 150) : String(e)}`);
+    }
 
     // ---- 8) Monta batch new_items[] -----------------------------------------
     const items: BudgetItem[] = [];
@@ -298,8 +313,11 @@ Deno.serve(async (req: Request) => {
       bdi: bdiPct,
       leis_sociais_horista: leisHorista,
       bancos_configurados: bancos.map((b) => `${b.nome} ${b.estado} ${b.data}`),
+      warnings,
       trace_id: traceId,
-      proximo_passo: 'Abra o Orçafascio na URL acima pra revisar. O bot configurou cabeçalho, bases, BDI, encargos sociais e adicionou todas as composições.',
+      proximo_passo: warnings.length > 0
+        ? `Orçamento criado com ${warnings.length} aviso(s) — alguns campos podem precisar ajuste manual. Abra a URL acima pra revisar.`
+        : 'Abra o Orçafascio na URL acima pra revisar. O bot configurou cabeçalho, bases, BDI, encargos sociais e adicionou todas as composições.',
     });
   } catch (err) {
     // Em falha, transiciona licitação pra erro

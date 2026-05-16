@@ -57,6 +57,7 @@ export function ExtractionPanel({ licitacaoId, arquivoId, status, ultimaExtracao
     bdi?: number;
     leis_sociais_horista?: number;
     bancos_configurados?: string[];
+    warnings?: string[];
   } | null>(null);
 
   const canStart = (status === 'rascunho' || status === 'aguardando_extracao') &&
@@ -120,6 +121,7 @@ export function ExtractionPanel({ licitacaoId, arquivoId, status, ultimaExtracao
           bdi: r.bdi,
           leis_sociais_horista: r.leis_sociais_horista,
           bancos_configurados: r.bancos_configurados,
+          warnings: r.warnings,
         });
       }
     });
@@ -343,6 +345,14 @@ export function ExtractionPanel({ licitacaoId, arquivoId, status, ultimaExtracao
               </>
             )}
           </dl>
+          {orcamentoResult.warnings && orcamentoResult.warnings.length > 0 && (
+            <details className="mt-2 rounded bg-amber-50 p-2 text-xs text-amber-900">
+              <summary className="cursor-pointer">⚠ {orcamentoResult.warnings.length} aviso(s) — ajuste manual recomendado</summary>
+              <ul className="mt-2 list-disc pl-4">
+                {orcamentoResult.warnings.map((w, i) => <li key={i}>{w}</li>)}
+              </ul>
+            </details>
+          )}
           <p className="mt-3 text-xs text-emerald-700">
             <strong>Próximo passo:</strong> abra o link acima no navegador (precisa estar
             logado no Orçafascio) pra revisar o orçamento criado.

@@ -464,6 +464,7 @@ export async function cadastrarOrcamentoCompleto(
   bdi?: number;
   leis_sociais_horista?: number;
   bancos_configurados?: string[];
+  warnings?: string[];
 }> {
   const supabase = await createClient();
   const { data: { session } } = await supabase.auth.getSession();
@@ -517,6 +518,7 @@ export async function cadastrarOrcamentoCompleto(
     bdi: body.bdi as number | undefined,
     leis_sociais_horista: body.leis_sociais_horista as number | undefined,
     bancos_configurados: body.bancos_configurados as string[] | undefined,
+    warnings: body.warnings as string[] | undefined,
   };
 }
 
