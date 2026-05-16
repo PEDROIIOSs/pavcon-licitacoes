@@ -73,23 +73,40 @@ const ERR_AUTH_TO_HTTP: Record<OrcafascioWebError['code'], number> = {
   login_unexpected: 502,
 };
 
+// Cada banco do Orçafascio existe pra UMA UF específica (ou poucas). Sem
+// override, Orçafascio retorna 500 em update_bases se voce mandar uma UF
+// inválida pro banco.
+const BANCO_UF_PADRAO: Record<string, string> = {
+  ORSE: 'SE', // ORSE só existe pra Sergipe
+  SEINFRA: 'CE', // SEINFRA é do Ceará
+  SBC: 'SP', // SBC = Síntese Básica de Custos (São Paulo)
+  FDE: 'SP', // FDE = Fundação para o Desenvolvimento da Educação (São Paulo)
+  SUDECAP: 'MG', // SUDECAP = Belo Horizonte / MG
+  // SINAPI e SICRO existem em todas as UFs — usa a UF da licitação como fallback
+};
+
 // Mapeia código de banco da licitação pra data — convenção atual: usar
 // "data_base_descricao" do JSON extraído (ex.: "SINAPI PI 03/2026") pra inferir.
 // Como fallback, usa o mês corrente.
 function inferBaseData(cabecalho: Record<string, unknown> | null, banco: string): { estado: string; data: string } {
   const desc = String(cabecalho?.data_base_descricao ?? '');
   const ufLicit = String(cabecalho?.uf ?? 'PI').toUpperCase().slice(0, 2);
+  // UF default: banco com UF fixa OU UF da licitação
+  const ufDefault = BANCO_UF_PADRAO[banco] ?? ufLicit;
   // Tenta achar "SINAPI ... MM/AAAA" no string
   const re = new RegExp(`${banco}[^\\d]*?([A-Z]{2})?[^\\d]*?(\\d{2}\\/\\d{4})`, 'i');
   const m = desc.match(re);
   if (m) {
-    return { estado: (m[1] ?? ufLicit).toUpperCase(), data: m[2] };
+    // Banco com UF fixa (ORSE, SEINFRA, etc.) ignora UF extraída do texto —
+    // ela pode estar errada e quebrar a chamada.
+    const estado = BANCO_UF_PADRAO[banco] ?? (m[1] ?? ufLicit).toUpperCase();
+    return { estado, data: m[2] };
   }
   // Fallback: mês passado
   const now = new Date();
   const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const data = `${String(lastMonth.getMonth() + 1).padStart(2, '0')}/${lastMonth.getFullYear()}`;
-  return { estado: ufLicit, data };
+  return { estado: ufDefault, data };
 }
 
 Deno.serve(async (req: Request) => {
