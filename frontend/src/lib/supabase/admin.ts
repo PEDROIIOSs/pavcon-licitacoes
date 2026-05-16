@@ -3,6 +3,7 @@
 // O service_role key NÃO pode ser exposto ao browser.
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { env } from '@/lib/env';
 
 // Tipo permissivo enquanto não geramos schema do banco com supabase gen types.
 // Aceita any table/row — dá responsabilidade ao chamador de mandar shape certa.
@@ -13,15 +14,10 @@ let adminClient: AnyClient | null = null;
 
 export function createAdminClient(): AnyClient {
   if (adminClient) return adminClient;
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !serviceKey) {
-    throw new Error(
-      'SUPABASE_SERVICE_ROLE_KEY ausente. Adicione em .env.local — sem isso operações privilegiadas falham.',
-    );
-  }
-  adminClient = createClient(url, serviceKey, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  }) as AnyClient;
+  adminClient = createClient(
+    env.NEXT_PUBLIC_SUPABASE_URL,
+    env.SUPABASE_SERVICE_ROLE_KEY,
+    { auth: { autoRefreshToken: false, persistSession: false } },
+  ) as AnyClient;
   return adminClient;
 }
