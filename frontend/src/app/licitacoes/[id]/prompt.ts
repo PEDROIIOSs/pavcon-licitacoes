@@ -55,7 +55,12 @@ REGRAS:
 - Hierarquia inferida pelo número: "1" → nível 1, "1.1" → nível 2; pai("1.1.5") = "1.1".
 - composicao_propria SÓ existe quando fonte="PROPRIA".
 - Números com ponto decimal (não vírgula).
-- Devolva o JSON puro, SEM \`\`\`json\`\`\`, sem texto antes ou depois.
+
+FORMATO DA RESPOSTA:
+- Coloque o JSON inteiro DENTRO de UM bloco \`\`\`json ... \`\`\` (markdown fenced code).
+- Isso vai virar um Artifact no Claude.ai (painel lateral) com botão de download direto.
+- O usuário pode usar o botão "Copy code" do bloco ou baixar o arquivo \`.json\` pelo Artifact — sem precisar selecionar texto manualmente.
+- NÃO escreva nada antes ou depois do bloco \`\`\`json. Sem comentários, sem explicações.
 `;
 
 export const NOTEBOOKLM_URL = 'https://notebooklm.google.com/';

@@ -36,9 +36,32 @@ export function ImportJsonModal({
   onSuccess,
 }: Props) {
   const [jsonText, setJsonText] = useState('');
+  const [uploadedName, setUploadedName] = useState<string | null>(null);
   const [showPrompt, setShowPrompt] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+
+  function handleFile(file: File | null) {
+    if (!file) return;
+    setError(null);
+    if (file.size > 5 * 1024 * 1024) {
+      setError('Arquivo > 5 MB. Cole o texto diretamente ou divida.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const content = String(reader.result ?? '');
+      setJsonText(content);
+      setUploadedName(file.name);
+    };
+    reader.onerror = () => setError('Erro ao ler o arquivo.');
+    reader.readAsText(file);
+  }
+
+  function handleDrop(e: React.DragEvent<HTMLLabelElement>) {
+    e.preventDefault();
+    handleFile(e.dataTransfer.files?.[0] ?? null);
+  }
 
   if (!open) return null;
 
@@ -69,6 +92,7 @@ export function ImportJsonModal({
       } else {
         onSuccess(r.composicoes_inseridas ?? 0, r.sub_itens_inseridos ?? 0);
         setJsonText('');
+        setUploadedName(null);
         onClose();
       }
     });
@@ -152,7 +176,10 @@ export function ImportJsonModal({
                 )}
               </ol>
               <p className="mt-2">
-                Passo 3 — Copia o JSON da resposta e cola aqui embaixo.
+                Passo 3 — A resposta vai abrir como <strong>Artifact</strong> no painel
+                lateral. Clica no botão de <strong>Download</strong> do Artifact pra salvar
+                o arquivo <code className="rounded bg-zinc-200 px-1">.json</code>, e arrasta
+                ele na área de upload abaixo.
               </p>
             </div>
           )}
@@ -185,16 +212,56 @@ export function ImportJsonModal({
             )}
           </div>
 
-          <label className="block">
-            <span className="text-sm font-medium text-zinc-700">Cole o JSON da resposta aqui</span>
-            <textarea
-              value={jsonText}
-              onChange={(e) => setJsonText(e.target.value)}
-              disabled={isPending}
-              placeholder='{"cabecalho": {...}, "itens": [...]}'
-              className="mt-1 block h-64 w-full rounded-md border border-zinc-300 px-3 py-2 font-mono text-xs focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900"
-            />
-          </label>
+          <div>
+            <p className="text-sm font-medium text-zinc-700">
+              Opção A — Upload do arquivo (recomendado)
+            </p>
+            <p className="mt-0.5 text-xs text-zinc-500">
+              Baixa o JSON do Artifact do Claude (botão de download no painel lateral) e
+              arrasta aqui ou clica pra escolher.
+            </p>
+            <label
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={handleDrop}
+              className="mt-2 flex cursor-pointer items-center justify-center rounded-md border-2 border-dashed border-zinc-300 bg-zinc-50 px-4 py-6 text-center hover:border-zinc-400"
+            >
+              <input
+                type="file"
+                accept=".json,.txt,application/json,text/plain"
+                onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
+                disabled={isPending}
+                className="hidden"
+              />
+              {uploadedName ? (
+                <span className="text-xs text-emerald-700">
+                  ✓ {uploadedName} carregado ({jsonText.length.toLocaleString('pt-BR')}{' '}
+                  caracteres)
+                </span>
+              ) : (
+                <span className="text-xs text-zinc-600">
+                  Arraste o arquivo aqui ou clica pra escolher (.json ou .txt)
+                </span>
+              )}
+            </label>
+          </div>
+
+          <details className="text-xs">
+            <summary className="cursor-pointer text-zinc-600">
+              Opção B — Colar texto manualmente
+            </summary>
+            <label className="mt-2 block">
+              <textarea
+                value={jsonText}
+                onChange={(e) => {
+                  setJsonText(e.target.value);
+                  if (uploadedName) setUploadedName(null);
+                }}
+                disabled={isPending}
+                placeholder='{"cabecalho": {...}, "itens": [...]} — ou bloco ```json envolvente'
+                className="mt-1 block h-64 w-full rounded-md border border-zinc-300 px-3 py-2 font-mono text-xs focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900"
+              />
+            </label>
+          </details>
 
           {error && (
             <div className="rounded-md bg-red-50 p-3 text-sm text-red-800">{error}</div>
