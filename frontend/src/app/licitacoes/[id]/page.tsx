@@ -8,6 +8,10 @@ import type { ExtractedItem } from './actions';
 
 export const metadata = { title: 'Orçamento — Pavcon' };
 export const dynamic = 'force-dynamic'; // sempre fresh, refletir estados em transição
+// Server actions desta página (importar JSON manual, cadastrar Orçafascio) fazem
+// múltiplos round-trips ao Supabase. Sem isso, action pesada estoura os 10s
+// default do Vercel Hobby e o spinner fica eterno no cliente.
+export const maxDuration = 60;
 
 export default async function LicitacaoDetailPage({
   params,
