@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react';
 import {
   approveExtraction,
   cadastrarNoOrcafascio,
+  cadastrarOrcamentoCompleto,
   resetToDraft,
   saveExtractionEdits,
   startExtraction,
@@ -47,6 +48,16 @@ export function ExtractionPanel({ licitacaoId, arquivoId, status, ultimaExtracao
     itens_adicionados?: number;
     warnings?: string[];
   } | null>(null);
+  const [orcamentoResult, setOrcamentoResult] = useState<{
+    budget_id?: string;
+    budget_url?: string;
+    etapas_criadas?: number;
+    composicoes_criadas?: number;
+    total_itens_batch?: number;
+    bdi?: number;
+    leis_sociais_horista?: number;
+    bancos_configurados?: string[];
+  } | null>(null);
 
   const canStart = (status === 'rascunho' || status === 'aguardando_extracao') &&
     !!arquivoId;
@@ -87,6 +98,28 @@ export function ExtractionPanel({ licitacaoId, arquivoId, status, ultimaExtracao
           composicoes_puladas: r.composicoes_puladas,
           itens_adicionados: r.itens_adicionados,
           warnings: r.warnings,
+        });
+      }
+    });
+  }
+
+  function handleCadastrarOrcamentoCompleto() {
+    setActionError(null);
+    setOrcamentoResult(null);
+    startTransition(async () => {
+      const r = await cadastrarOrcamentoCompleto(licitacaoId);
+      if (r?.error) {
+        setActionError(r.error);
+      } else {
+        setOrcamentoResult({
+          budget_id: r.budget_id,
+          budget_url: r.budget_url,
+          etapas_criadas: r.etapas_criadas,
+          composicoes_criadas: r.composicoes_criadas,
+          total_itens_batch: r.total_itens_batch,
+          bdi: r.bdi,
+          leis_sociais_horista: r.leis_sociais_horista,
+          bancos_configurados: r.bancos_configurados,
         });
       }
     });
@@ -250,6 +283,69 @@ export function ExtractionPanel({ licitacaoId, arquivoId, status, ultimaExtracao
           )}
           <p className="mt-2 text-xs text-emerald-800">
             <strong>Próximo passo:</strong> abra o Orçafascio, crie um novo Orçamento apontando pra pasta criada e importe as composições.
+          </p>
+        </div>
+      )}
+
+      {/* Cadastrar orçamento completo — disponível após cadastrar composições (fase1_concluida) */}
+      {(status === 'fase1_concluida' || status === 'criando_orcamento_base') && !orcamentoResult && (
+        <div className="space-y-3 rounded-md border border-purple-200 bg-purple-50 p-4">
+          <div>
+            <p className="text-sm font-medium text-purple-900">
+              🚀 Cadastrar orçamento completo no Orçafascio (automação 100%)
+            </p>
+            <p className="mt-1 text-xs text-purple-800">
+              Cria o orçamento no Orçafascio com cabeçalho, BDI, leis sociais e adiciona
+              todas as etapas + composições em batch único. Usa a API interna /v2023/
+              (cookie de sessão). Você só precisa abrir o link no fim pra revisar.
+            </p>
+          </div>
+          <button
+            onClick={handleCadastrarOrcamentoCompleto}
+            disabled={isPending}
+            className="rounded-md bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50"
+          >
+            {isPending ? 'Cadastrando…' : '🚀 Cadastrar orçamento completo'}
+          </button>
+        </div>
+      )}
+
+      {orcamentoResult && (
+        <div className="space-y-2 rounded-md border border-emerald-300 bg-emerald-50 p-4 text-sm">
+          <p className="font-semibold text-emerald-900">
+            ✅ Orçamento criado no Orçafascio!
+          </p>
+          {orcamentoResult.budget_url && (
+            <a
+              href={orcamentoResult.budget_url}
+              target="_blank"
+              rel="noreferrer"
+              className="block rounded-md bg-white px-3 py-2 text-xs text-emerald-800 underline hover:bg-emerald-100"
+            >
+              {orcamentoResult.budget_url}
+            </a>
+          )}
+          <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-emerald-800">
+            <dt>Budget ID:</dt>
+            <dd className="font-mono">{orcamentoResult.budget_id}</dd>
+            <dt>Etapas criadas:</dt>
+            <dd className="font-medium">{orcamentoResult.etapas_criadas ?? 0}</dd>
+            <dt>Composições criadas:</dt>
+            <dd className="font-medium">{orcamentoResult.composicoes_criadas ?? 0}</dd>
+            <dt>BDI configurado:</dt>
+            <dd className="font-medium">{orcamentoResult.bdi}%</dd>
+            <dt>Leis sociais (horista):</dt>
+            <dd className="font-medium">{orcamentoResult.leis_sociais_horista}%</dd>
+            {orcamentoResult.bancos_configurados && orcamentoResult.bancos_configurados.length > 0 && (
+              <>
+                <dt>Bancos:</dt>
+                <dd className="font-medium">{orcamentoResult.bancos_configurados.join(', ')}</dd>
+              </>
+            )}
+          </dl>
+          <p className="mt-3 text-xs text-emerald-700">
+            <strong>Próximo passo:</strong> abra o link acima no navegador (precisa estar
+            logado no Orçafascio) pra revisar o orçamento criado.
           </p>
         </div>
       )}

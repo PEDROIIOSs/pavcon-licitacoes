@@ -453,6 +453,73 @@ export async function cadastrarNoOrcafascio(
   };
 }
 
+export async function cadastrarOrcamentoCompleto(
+  licitacaoId: string,
+): Promise<ActionResult & {
+  budget_id?: string;
+  budget_url?: string;
+  etapas_criadas?: number;
+  composicoes_criadas?: number;
+  total_itens_batch?: number;
+  bdi?: number;
+  leis_sociais_horista?: number;
+  bancos_configurados?: string[];
+}> {
+  const supabase = await createClient();
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return { error: 'Não autenticado.' };
+
+  // Busca a credencial WEB (auth_type='web') — diferente da API (auth_type='api')
+  const { data: creds, error: credErr } = await supabase
+    .from('api_credentials')
+    .select('id, metadata')
+    .eq('provider', 'orcafascio')
+    .eq('ativo', true);
+  if (credErr) return { error: `Falha ao listar credenciais: ${credErr.message}` };
+  const cred = (creds ?? []).find(
+    (c) => (c.metadata as { auth_type?: string } | null)?.auth_type === 'web',
+  );
+  if (!cred) {
+    return {
+      error: 'Nenhuma credencial Orçafascio com auth_type="web" cadastrada. Cadastre a senha do Orçafascio no Vault primeiro.',
+    };
+  }
+
+  const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/orcafascio-cadastrar-orcamento`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ licitacao_id: licitacaoId, credential_id: cred.id }),
+  });
+  const text = await res.text();
+  let body: Record<string, unknown> = {};
+  try { body = JSON.parse(text); } catch {}
+
+  revalidatePath(`/licitacoes/${licitacaoId}`);
+
+  if (!res.ok) {
+    return {
+      error: `Cadastro do orçamento falhou (${res.status}): ${(body.error as string) ?? text.slice(0, 300)}`,
+      details: body.details ?? null,
+    };
+  }
+
+  return {
+    ok: true,
+    budget_id: body.budget_id as string | undefined,
+    budget_url: body.budget_url as string | undefined,
+    etapas_criadas: body.etapas_criadas as number | undefined,
+    composicoes_criadas: body.composicoes_criadas as number | undefined,
+    total_itens_batch: body.total_itens_batch as number | undefined,
+    bdi: body.bdi as number | undefined,
+    leis_sociais_horista: body.leis_sociais_horista as number | undefined,
+    bancos_configurados: body.bancos_configurados as string[] | undefined,
+  };
+}
+
 export async function resetToDraft(licitacaoId: string): Promise<ActionResult> {
   // Útil quando a extração falha: zerar pra rascunho e tentar de novo.
   const supabase = await createClient();
