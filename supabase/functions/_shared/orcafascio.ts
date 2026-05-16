@@ -274,19 +274,26 @@ export async function authenticateOrcafascio(
     result.json.user?.id,
     result.json.user_id,
   );
+  // Orçafascio começou a aninhar company_id e company_name DENTRO de user.
+  // Mantém os caminhos antigos pra compatibilidade.
   const orcafascioCompanyId = pick(
+    result.json.user?.company_id,
     result.json.company?._id,
     result.json.company?.id,
     result.json.company_id,
   );
   const orcafascioDepartmentId = pick(
+    result.json.user?.department_id,
     result.json.department?._id,
     result.json.department?.id,
     result.json.department_id,
   );
   const email = pick(result.json.user?.email, result.json.email) ??
     credentialEmail;
-  const companyName = result.json.company?.name ?? null;
+  const companyName = pick(
+    result.json.user?.company_name,
+    result.json.company?.name,
+  );
 
   if (!authToken || !orcafascioUserId || !orcafascioCompanyId) {
     throw new OrcafascioAuthError(
