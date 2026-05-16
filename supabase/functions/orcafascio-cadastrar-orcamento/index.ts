@@ -217,12 +217,33 @@ Deno.serve(async (req: Request) => {
     // é criar o budget + add items, que vem depois). Coletamos warnings.
     const warnings: string[] = [];
 
-    const bancos = basesUtilizadas
-      .filter((b) => ['SINAPI', 'SBC', 'SICRO', 'ORSE', 'SEINFRA', 'FDE', 'SUDECAP'].includes(b.toUpperCase()))
-      .map((b) => {
-        const upper = b.toUpperCase() as 'SINAPI' | 'SBC' | 'SICRO' | 'ORSE' | 'SEINFRA' | 'FDE' | 'SUDECAP';
-        const { estado, data } = inferBaseData(cabecalho, upper);
-        return { nome: upper, estado, data, exibir_relatorio: true };
+    // Normaliza variantes: "SICRO3"→"SICRO", "SINAPI 2"→"SINAPI", etc.
+    // Orçafascio aceita só os nomes canônicos.
+    function normalizeBanco(b: string): string {
+      const u = b.toUpperCase().trim();
+      if (u.startsWith('SINAPI')) return 'SINAPI';
+      if (u.startsWith('SICRO')) return 'SICRO';
+      if (u.startsWith('SEINFRA')) return 'SEINFRA';
+      if (u.startsWith('ORSE')) return 'ORSE';
+      if (u.startsWith('SBC')) return 'SBC';
+      if (u.startsWith('FDE')) return 'FDE';
+      if (u.startsWith('SUDECAP')) return 'SUDECAP';
+      return u;
+    }
+    const ALLOWED_BANCOS = ['SINAPI', 'SBC', 'SICRO', 'ORSE', 'SEINFRA', 'FDE', 'SUDECAP'];
+    const bancos = Array.from(new Set(basesUtilizadas.map(normalizeBanco)))
+      .filter((b) => ALLOWED_BANCOS.includes(b))
+      .map((upper) => {
+        const { estado, data } = inferBaseData(
+          cabecalho,
+          upper as 'SINAPI' | 'SBC' | 'SICRO' | 'ORSE' | 'SEINFRA' | 'FDE' | 'SUDECAP',
+        );
+        return {
+          nome: upper as 'SINAPI' | 'SBC' | 'SICRO' | 'ORSE' | 'SEINFRA' | 'FDE' | 'SUDECAP',
+          estado,
+          data,
+          exibir_relatorio: true,
+        };
       });
     if (bancos.length > 0) {
       try {
