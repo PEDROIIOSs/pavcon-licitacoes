@@ -12,6 +12,13 @@ import {
 } from './actions';
 import { ExtractionEditor } from './extraction-editor';
 import { ImportJsonModal } from './import-json-modal';
+import { EXTRACTION_PROMPT, NOTEBOOKLM_URL, claudeNewChatUrl } from './prompt';
+
+interface ArquivoLink {
+  id: string;
+  filename_original: string;
+  downloadUrl: string | null;
+}
 
 interface ExtractionSummary {
   id: string;
@@ -32,14 +39,22 @@ interface ExtractionSummary {
 interface Props {
   licitacaoId: string;
   arquivoId: string | null;
+  arquivos: ArquivoLink[];
   status: string;
   ultimaExtracao: ExtractionSummary | null;
 }
 
-export function ExtractionPanel({ licitacaoId, arquivoId, status, ultimaExtracao }: Props) {
+export function ExtractionPanel({
+  licitacaoId,
+  arquivoId,
+  arquivos,
+  status,
+  ultimaExtracao,
+}: Props) {
   const [isPending, startTransition] = useTransition();
   const [actionError, setActionError] = useState<string | null>(null);
   const [importModal, setImportModal] = useState<null | 'notebooklm' | 'claude_code'>(null);
+  const [promptCopied, setPromptCopied] = useState(false);
   const [importResult, setImportResult] = useState<{ composicoes: number; subItens: number } | null>(null);
   const [cadastroResult, setCadastroResult] = useState<{
     grupo_descricao?: string;
@@ -83,6 +98,19 @@ export function ExtractionPanel({ licitacaoId, arquivoId, status, ultimaExtracao
       const r = await resetToDraft(licitacaoId);
       if (r?.error) setActionError(r.error);
     });
+  }
+
+  function openManualExtraction(source: 'notebooklm' | 'claude_code') {
+    // IMPORTANTE: window.open precisa rodar síncrono dentro do click handler
+    // pra navegador não tratar como popup bloqueado.
+    const url = source === 'notebooklm' ? NOTEBOOKLM_URL : claudeNewChatUrl(EXTRACTION_PROMPT);
+    window.open(url, '_blank', 'noopener,noreferrer');
+    // Copiar pro clipboard — promise mas não bloqueia o fluxo
+    navigator.clipboard
+      .writeText(EXTRACTION_PROMPT)
+      .then(() => setPromptCopied(true))
+      .catch(() => setPromptCopied(false));
+    setImportModal(source);
   }
 
   function handleCadastrar() {
@@ -162,29 +190,31 @@ export function ExtractionPanel({ licitacaoId, arquivoId, status, ultimaExtracao
 
             {/* Opção 2 — NotebookLM */}
             <button
-              onClick={() => setImportModal('notebooklm')}
+              onClick={() => openManualExtraction('notebooklm')}
               disabled={isPending}
               className="rounded-md border border-zinc-300 bg-white p-4 text-left hover:bg-zinc-50 disabled:opacity-50"
             >
               <p className="text-sm font-semibold text-zinc-900">
-                📓 NotebookLM (cola JSON)
+                📓 NotebookLM (1 clique)
               </p>
               <p className="mt-1 text-xs text-zinc-600">
-                Você extrai no NotebookLM com prompt pronto, cola o JSON aqui. Free.
+                Abre o NotebookLM em nova aba + copia o prompt + mostra os PDFs pra
+                baixar. Gratuito.
               </p>
             </button>
 
-            {/* Opção 3 — Claude Code manual */}
+            {/* Opção 3 — Claude.ai */}
             <button
-              onClick={() => setImportModal('claude_code')}
+              onClick={() => openManualExtraction('claude_code')}
               disabled={isPending}
               className="rounded-md border border-zinc-300 bg-white p-4 text-left hover:bg-zinc-50 disabled:opacity-50"
             >
               <p className="text-sm font-semibold text-zinc-900">
-                🤖 Claude Code (cola JSON)
+                🤖 Claude (1 clique)
               </p>
               <p className="mt-1 text-xs text-zinc-600">
-                Você anexa o PDF no chat do Claude, ele devolve o JSON, você cola.
+                Abre o Claude com prompt já pre-preenchido. Você só anexa o PDF e
+                envia.
               </p>
             </button>
           </div>
@@ -202,8 +232,13 @@ export function ExtractionPanel({ licitacaoId, arquivoId, status, ultimaExtracao
       <ImportJsonModal
         licitacaoId={licitacaoId}
         source={importModal ?? 'outro'}
+        arquivos={arquivos}
+        promptCopied={promptCopied}
         open={importModal !== null}
-        onClose={() => setImportModal(null)}
+        onClose={() => {
+          setImportModal(null);
+          setPromptCopied(false);
+        }}
         onSuccess={(c, s) => setImportResult({ composicoes: c, subItens: s })}
       />
 

@@ -44,6 +44,23 @@ export default async function LicitacaoDetailPage({
   const extracoes = extrResp.data ?? [];
   const ultimaExtracao = extracoes[0];
 
+  // Signed URLs dos PDFs pra extração manual (NotebookLM/Claude).
+  // TTL de 1h é suficiente pra usuário baixar e arrastar pra ferramenta externa.
+  const arquivosComUrl = await Promise.all(
+    arquivos.map(async (a) => {
+      const { data } = await supabase.storage
+        .from('editais')
+        .createSignedUrl(a.storage_path, 3600, {
+          download: a.filename_original,
+        });
+      return {
+        id: a.id,
+        filename_original: a.filename_original,
+        downloadUrl: data?.signedUrl ?? null,
+      };
+    }),
+  );
+
   // Polling automático enquanto status indica trabalho em andamento
   const inFlightStatuses = new Set(['extraindo', 'criando_composicoes_edital', 'criando_orcamento_base']);
   const shouldPoll = inFlightStatuses.has(licitacao.status);
@@ -103,6 +120,7 @@ export default async function LicitacaoDetailPage({
           licitacaoId={licitacao.id}
           status={licitacao.status}
           arquivoId={arquivos[0]?.id ?? null}
+          arquivos={arquivosComUrl}
           ultimaExtracao={ultimaExtracao
             ? {
                 id: ultimaExtracao.id,

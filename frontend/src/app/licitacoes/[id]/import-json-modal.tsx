@@ -2,87 +2,39 @@
 
 import { useState, useTransition } from 'react';
 import { importarExtracaoManual } from './actions';
+import { EXTRACTION_PROMPT } from './prompt';
+
+interface ArquivoLink {
+  id: string;
+  filename_original: string;
+  downloadUrl: string | null;
+}
 
 interface Props {
   licitacaoId: string;
   source: 'notebooklm' | 'claude_code' | 'outro';
+  arquivos: ArquivoLink[];
+  promptCopied: boolean;
   open: boolean;
   onClose: () => void;
   onSuccess: (composicoes: number, subItens: number) => void;
 }
 
 const SOURCE_TITLE: Record<Props['source'], string> = {
-  notebooklm: 'Importar JSON do NotebookLM',
-  claude_code: 'Importar JSON via Claude Code',
+  notebooklm: 'Extração via NotebookLM',
+  claude_code: 'Extração via Claude',
   outro: 'Importar JSON manualmente',
 };
 
-const SOURCE_HELP: Record<Props['source'], string> = {
-  notebooklm:
-    'Abre o NotebookLM, sobe os PDFs do edital e cola o prompt abaixo. Pega o JSON da resposta e cola aqui.',
-  claude_code:
-    'Abre o Claude (chat ou Claude Code), anexa os PDFs do edital e cola o prompt abaixo. Pega o JSON da resposta e cola aqui.',
-  outro: 'Cola aqui o JSON gerado por qualquer ferramenta de extração — ele deve seguir o schema abaixo.',
-};
-
-const PROMPT_TEMPLATE = `Você é um extrator estruturado de planilhas orçamentárias de editais brasileiros de obras públicas.
-
-OBJETIVO: ler o(s) PDF(s) anexado(s) e devolver UM ÚNICO objeto JSON exatamente no schema abaixo. NÃO escreva nada antes ou depois do JSON.
-
-SCHEMA:
-{
-  "cabecalho": {
-    "orgao": string,
-    "objeto": string,
-    "municipio": string,
-    "uf": string,                              // 2 letras (PI, SP, ...)
-    "numero_edital": string | null,
-    "data_base_descricao": string | null,
-    "bases_utilizadas": string[],              // ["SINAPI","SEINFRA","ORSE",...]
-    "com_desoneracao": boolean | null,
-    "leis_sociais_percentual": number | null,
-    "bdi_percentual": number | null
-  },
-  "itens": [
-    {
-      "item_codigo": string,                   // ex: "5.1.5"
-      "nivel": number,
-      "pai": string | null,                    // pai do item, sem o último ".X"
-      "tipo": "grupo" | "servico",
-      "codigo": string | null,                 // SINAPI/SEINFRA/ORSE ou null
-      "fonte": "SINAPI"|"SICRO"|"SEINFRA"|"ORSE"|"SBC"|"PROPRIA"|"OUTRA"|null,
-      "descricao": string,
-      "unidade": string | null,                // M, M2, KG, CJ, UN, etc.
-      "quantidade": number | null,
-      "preco_unitario_sem_bdi": number | null,
-      "preco_unitario_com_bdi": number | null,
-      "preco_total": number | null,
-      "composicao_propria": {                  // SOMENTE quando fonte = "PROPRIA"
-        "itens": [
-          {
-            "classe": "INSUMO"|"COMPOSICAO"|"MAT"|"EQUIPAMENTO",
-            "codigo": string | null,
-            "fonte": "SINAPI"|"SICRO"|"SEINFRA"|"ORSE"|"SBC"|"PROPRIA"|"OUTRA",
-            "descricao": string,
-            "unidade": string | null,
-            "coeficiente": number,
-            "preco_unitario": number | null
-          }
-        ]
-      }
-    }
-  ]
-}
-
-REGRAS:
-- "tipo=grupo" pra itens agregadores (sem qtd/preço), "tipo=servico" pra linhas com quantidade.
-- Hierarquia inferida pelo número: "1" → nível 1, "1.1" → nível 2; pai("1.1.5") = "1.1".
-- composicao_propria SÓ existe quando fonte="PROPRIA".
-- Números com ponto decimal (não vírgula).
-- Devolva o JSON puro, SEM \`\`\`json\`\`\`, sem texto antes ou depois.
-`;
-
-export function ImportJsonModal({ licitacaoId, source, open, onClose, onSuccess }: Props) {
+export function ImportJsonModal({
+  licitacaoId,
+  source,
+  arquivos,
+  promptCopied,
+  open,
+  onClose,
+  onSuccess,
+}: Props) {
   const [jsonText, setJsonText] = useState('');
   const [showPrompt, setShowPrompt] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -90,8 +42,16 @@ export function ImportJsonModal({ licitacaoId, source, open, onClose, onSuccess 
 
   if (!open) return null;
 
+  const isManualImport = source === 'outro';
+  const toolName =
+    source === 'notebooklm'
+      ? 'NotebookLM'
+      : source === 'claude_code'
+        ? 'Claude'
+        : '';
+
   function copyPrompt() {
-    navigator.clipboard.writeText(PROMPT_TEMPLATE).then(() => {
+    navigator.clipboard.writeText(EXTRACTION_PROMPT).then(() => {
       setError(null);
     });
   }
@@ -128,20 +88,92 @@ export function ImportJsonModal({ licitacaoId, source, open, onClose, onSuccess 
           </button>
         </div>
 
-        <div className="flex-1 overflow-auto px-6 py-4">
-          <p className="text-sm text-zinc-600">{SOURCE_HELP[source]}</p>
+        <div className="flex-1 space-y-4 overflow-auto px-6 py-4">
+          {!isManualImport && (
+            <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-xs">
+              <p className="font-medium text-emerald-900">
+                ✓ Aba do {toolName} aberta em nova janela
+              </p>
+              <p className="mt-1 text-emerald-800">
+                {promptCopied
+                  ? `✓ Prompt copiado pro clipboard (Ctrl+V na ${toolName})`
+                  : source === 'claude_code'
+                    ? '✓ O prompt já vai aparecer pre-preenchido na caixa de mensagem do Claude.'
+                    : '⚠ Não consegui copiar o prompt automaticamente — use o botão "Copiar prompt" abaixo.'}
+              </p>
+            </div>
+          )}
 
-          <div className="mt-4">
+          {!isManualImport && arquivos.length > 0 && (
+            <div className="rounded-md border border-zinc-200 bg-zinc-50 p-3">
+              <p className="text-xs font-medium text-zinc-700">
+                Passo 1 — Baixe os PDFs e arraste pro {toolName}:
+              </p>
+              <ul className="mt-2 space-y-1">
+                {arquivos.map((a) => (
+                  <li key={a.id}>
+                    {a.downloadUrl ? (
+                      <a
+                        href={a.downloadUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-2 text-xs text-blue-700 hover:underline"
+                      >
+                        ⬇ {a.filename_original}
+                      </a>
+                    ) : (
+                      <span className="text-xs text-zinc-500">
+                        {a.filename_original} (link expirado — recarregue a página)
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {!isManualImport && (
+            <div className="rounded-md border border-zinc-200 bg-zinc-50 p-3 text-xs text-zinc-700">
+              <p className="font-medium">
+                Passo 2 — Na aba do {toolName}:
+              </p>
+              <ol className="mt-2 list-decimal space-y-0.5 pl-5">
+                {source === 'notebooklm' ? (
+                  <>
+                    <li>Clica em &ldquo;New notebook&rdquo;</li>
+                    <li>Arrasta os PDFs baixados como fontes</li>
+                    <li>Cola o prompt (Ctrl+V) e envia</li>
+                  </>
+                ) : (
+                  <>
+                    <li>Arrasta os PDFs baixados pra caixa de mensagem (ou clica no clipe 📎)</li>
+                    <li>O prompt já está pré-preenchido — só clica em enviar</li>
+                  </>
+                )}
+              </ol>
+              <p className="mt-2">
+                Passo 3 — Copia o JSON da resposta e cola aqui embaixo.
+              </p>
+            </div>
+          )}
+
+          {isManualImport && (
+            <p className="text-sm text-zinc-600">
+              Cola aqui o JSON gerado por qualquer ferramenta de extração — ele deve seguir o schema do prompt.
+            </p>
+          )}
+
+          <div>
             <button
               onClick={() => setShowPrompt((v) => !v)}
               className="text-xs text-blue-600 hover:underline"
             >
-              {showPrompt ? '▼ Esconder prompt' : '▶ Ver prompt pronto pra colar no NotebookLM/Claude'}
+              {showPrompt ? '▼ Esconder prompt' : '▶ Ver / copiar prompt manualmente'}
             </button>
             {showPrompt && (
               <div className="mt-2 space-y-2">
                 <pre className="max-h-64 overflow-auto rounded border border-zinc-200 bg-zinc-50 p-3 text-[11px] text-zinc-700">
-                  {PROMPT_TEMPLATE}
+                  {EXTRACTION_PROMPT}
                 </pre>
                 <button
                   onClick={copyPrompt}
@@ -153,19 +185,19 @@ export function ImportJsonModal({ licitacaoId, source, open, onClose, onSuccess 
             )}
           </div>
 
-          <label className="mt-4 block">
-            <span className="text-sm font-medium text-zinc-700">Cole o JSON aqui</span>
+          <label className="block">
+            <span className="text-sm font-medium text-zinc-700">Cole o JSON da resposta aqui</span>
             <textarea
               value={jsonText}
               onChange={(e) => setJsonText(e.target.value)}
               disabled={isPending}
               placeholder='{"cabecalho": {...}, "itens": [...]}'
-              className="mt-1 block h-72 w-full rounded-md border border-zinc-300 px-3 py-2 font-mono text-xs focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900"
+              className="mt-1 block h-64 w-full rounded-md border border-zinc-300 px-3 py-2 font-mono text-xs focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900"
             />
           </label>
 
           {error && (
-            <div className="mt-3 rounded-md bg-red-50 p-3 text-sm text-red-800">{error}</div>
+            <div className="rounded-md bg-red-50 p-3 text-sm text-red-800">{error}</div>
           )}
         </div>
 
