@@ -230,7 +230,13 @@ Deno.serve(async (req: Request) => {
         continue;
       }
 
-      const codigo = (comp.codigo ?? comp.item_codigo).slice(0, 50);
+      // MyBase tem UNIQUE em code+second_code por company. Pra evitar
+      // 'Codigo já está utilizada' em retries (ou em outras licitações que
+      // reusam item_codigo curto tipo "1.1"), prefixamos com o id da licitação.
+      const sanitized = (comp.codigo ?? comp.item_codigo)
+        .replace(/[^A-Za-z0-9._-]/g, '_')
+        .slice(0, 30);
+      const codigo = `${licitacaoId.slice(0, 8)}_${sanitized}`.slice(0, 50);
       const descricao = (comp.descricao ?? 'Composição própria do edital').slice(0, 500);
       const unidade = (comp.unidade ?? 'Un').slice(0, 20);
 
@@ -243,7 +249,11 @@ Deno.serve(async (req: Request) => {
       try {
         created = await createComposition(ctx, {
           code: codigo,
-          second_code: `LICITACAO_${licitacaoId.slice(0, 8)}`,
+          // second_code também precisa ser único por composição — antes era
+          // o mesmo pra todas, o que disparava UNIQUE em MyBase.
+          second_code: `${licitacaoId.slice(0, 8)}_${comp.item_codigo
+            .replace(/[^A-Za-z0-9._-]/g, '_')
+            .slice(0, 40)}`,
           description: descricao,
           labor: false,
           type: tipo,
