@@ -242,8 +242,12 @@ export async function importarExtracaoManual(
   jsonText: string,
   source: 'notebooklm' | 'claude_code' | 'outro',
 ): Promise<ImportarManualResult> {
+  const t0 = Date.now();
+  try {
+  console.log('[importar] start', { licitacaoId, source, jsonLen: jsonText.length });
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
+  console.log('[importar] auth', { ms: Date.now() - t0, userId: user?.id });
   if (!user) return { error: 'Não autenticado.' };
 
   // Parse + validate
@@ -251,6 +255,7 @@ export async function importarExtracaoManual(
   try {
     const cleaned = stripCodeFences(jsonText);
     parsed = validateManualJson(JSON.parse(cleaned));
+    console.log('[importar] parsed', { ms: Date.now() - t0, itens: parsed.itens.length });
   } catch (e) {
     return { error: `JSON inválido: ${e instanceof Error ? e.message : String(e)}` };
   }
@@ -283,6 +288,7 @@ export async function importarExtracaoManual(
 
   // Limpa extrações antigas dessa licitação
   await admin.from('extracoes_ocr').delete().eq('licitacao_id', licitacaoId);
+  console.log('[importar] cleared old extracoes', { ms: Date.now() - t0 });
 
   // Cria extração
   const meta = SOURCE_LABELS[source] ?? SOURCE_LABELS.outro;
@@ -305,9 +311,11 @@ export async function importarExtracaoManual(
     .select('id')
     .single();
   if (extrErr || !extr) {
+    console.error('[importar] extracao_ocr insert FAILED', extrErr);
     return { error: `Falha ao criar extracao_ocr: ${extrErr?.message}` };
   }
   const extracaoId = extr.id as string;
+  console.log('[importar] extracao_ocr created', { ms: Date.now() - t0, extracaoId });
 
   // Insere composicoes_extraidas
   const compRows = parsed.itens.map((item, idx) => ({
@@ -333,9 +341,14 @@ export async function importarExtracaoManual(
     .insert(compRows)
     .select('id, item_codigo');
   if (cErr || !persistidas) {
+    console.error('[importar] composicoes_extraidas insert FAILED', cErr);
     return { error: `Falha ao gravar composicoes_extraidas: ${cErr?.message}` };
   }
   const idByCodigo = new Map(persistidas.map((c) => [c.item_codigo as string, c.id as string]));
+  console.log('[importar] composicoes inseridas', {
+    ms: Date.now() - t0,
+    count: persistidas.length,
+  });
 
   // Insere composicao_propria_itens
   const subRows: Array<Record<string, unknown>> = [];
@@ -364,7 +377,14 @@ export async function importarExtracaoManual(
     const { error: subErr } = await admin
       .from('composicao_propria_itens')
       .insert(subRows);
-    if (subErr) return { error: `Falha ao gravar sub-itens: ${subErr.message}` };
+    if (subErr) {
+      console.error('[importar] composicao_propria_itens insert FAILED', subErr);
+      return { error: `Falha ao gravar sub-itens: ${subErr.message}` };
+    }
+    console.log('[importar] sub-itens inseridos', {
+      ms: Date.now() - t0,
+      count: subRows.length,
+    });
   }
 
   // Transições: rascunho/aguardando_extracao → extraindo → extracao_concluida → aguardando_revisao_humana
@@ -379,14 +399,24 @@ export async function importarExtracaoManual(
     .from('licitacoes')
     .update({ status: 'aguardando_revisao_humana' })
     .eq('id', licitacaoId);
+  console.log('[importar] status final', { ms: Date.now() - t0 });
 
   revalidatePath(`/licitacoes/${licitacaoId}`);
+  console.log('[importar] done', {
+    ms: Date.now() - t0,
+    comps: compRows.length,
+    subs: subRows.length,
+  });
 
   return {
     ok: true,
     composicoes_inseridas: compRows.length,
     sub_itens_inseridos: subRows.length,
   };
+  } catch (e) {
+    console.error('[importar] uncaught', { ms: Date.now() - t0, err: e });
+    return { error: `Erro interno: ${e instanceof Error ? e.message : String(e)}` };
+  }
 }
 
 export async function cadastrarNoOrcafascio(
