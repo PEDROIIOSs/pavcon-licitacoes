@@ -315,7 +315,11 @@ Deno.serve(async (req: Request) => {
     }
 
     try {
-      await updateBdi(ctx, budget_id, { bdi_manual: bdiPct, no_final: true });
+      // no_final=false: BDI incide sobre o preço UNITÁRIO da composição
+      // (método recomendado pelo TCU e usado pelos orçamentos base do
+      // órgão). Faz com que o total por item já apareça com BDI no Orçafascio,
+      // batendo com a planilha do edital.
+      await updateBdi(ctx, budget_id, { bdi_manual: bdiPct, no_final: false });
     } catch (e) {
       warnings.push(`updateBdi falhou: ${e instanceof Error ? e.message.slice(0, 150) : String(e)}`);
     }
@@ -349,19 +353,17 @@ Deno.serve(async (req: Request) => {
         etapasCriadas++;
       } else if (c.tipo_linha === 'servico') {
         // Pra fonte=PROPRIA, usar a composição cadastrada no MyBase (via cadastrar-edital).
-        // Importante: `code` é o código humano da composição (ex: '2da42d41_1.1'),
-        // não o MongoDB ObjectId. `public_banco_id` é o ObjectId — esse é o
-        // ponteiro real pra MyBase. Enviar ObjectId no `code` faz Orçafascio
-        // não conseguir resolver e mostra valor R$ 0,00.
+        // Importante: `public_banco_id` é o ObjectId do MyBase — esse é o
+        // ponteiro REAL que Orçafascio usa pra resolver a composição.
+        // `code` é só o que aparece na coluna CÓDIGO da tela do orçamento —
+        // pra PROPRIA, mantemos o valor do edital (ex: 'COMPOSICAO'/'COMPOSIC')
+        // pra ficar coerente com o orçamento base do órgão.
         const isPropria = c.fonte === 'PROPRIA';
-        const mybaseCode = `${licitacaoId.slice(0, 8)}_${(c.item_codigo as string)
-          .replace(/[^A-Za-z0-9._-]/g, '_')
-          .slice(0, 30)}`;
         const code = isPropria
-          ? mybaseCode
+          ? (c.codigo ?? 'COMPOSICAO') // valor extraído do edital pra display
           : (c.codigo ?? '');
-        if (!code) continue; // sem código, pula
-        if (isPropria && !c.orcafascio_composition_id) continue; // PROPRIA sem MyBase = sem valor, pula
+        if (!code) continue;
+        if (isPropria && !c.orcafascio_composition_id) continue; // PROPRIA sem MyBase = pula
 
         items.push({
           kind: 'composition',
