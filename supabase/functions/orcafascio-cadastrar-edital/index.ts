@@ -277,10 +277,11 @@ Deno.serve(async (req: Request) => {
             type: tipo,
             unit: unidade,
             local: uf,
-            // ARREDONDAR (half-up) bate melhor com o padrão TCU/edital.
-            // TRUNCAR_2_CASAS estava criando diffs de centavos no preço
-            // unitário final da composição.
-            rounding_type: ROUNDING_TYPE.ARREDONDAR,
+            // CRÍTICO PARA LICITAÇÃO: TRUNCAR sempre arredonda PRA BAIXO.
+            // Nosso orçamento NUNCA pode ter valor maior que o edital
+            // (desclassificação). ARREDONDAR (half-up) pode somar centavos
+            // por cima do edital — usamos TRUNCAR pra garantir ≤ edital.
+            rounding_type: ROUNDING_TYPE.TRUNCAR_2_CASAS,
             is_sicro: false,
             note: `Composição extraída do edital. Item ${comp.item_codigo}.`,
           });
