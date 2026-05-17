@@ -58,6 +58,8 @@ import {
   COMPOSITION_TYPES,
   createComposition,
   createGroup,
+  findCompositionByCode,
+  findGroupByDescription,
   fonteToBank,
   OrcafascioApiError,
   pickUF,
@@ -206,7 +208,9 @@ Deno.serve(async (req: Request) => {
       traceId,
     };
 
-    // ---- 4) Cria grupo ---------------------------------------------------------
+    // ---- 4) Find-or-create grupo -----------------------------------------------
+    // Idempotência: se já existe grupo com mesma descrição, reusa (retry
+    // depois de erro não cria duplicata e nem 422 'já está utilizada').
     const grupoDescricao = [
       'EDITAL',
       licitacao.numero_edital ?? licitacao.id.slice(0, 8),
@@ -214,8 +218,13 @@ Deno.serve(async (req: Request) => {
       licitacao.uf,
     ].filter(Boolean).join(' / ').slice(0, 200);
 
-    const grupo = await createGroup(ctx, { description: grupoDescricao });
-    console.log(`[cadastrar-edital] grupo criado: ${grupo.id} — ${grupoDescricao}`);
+    const existingGroup = await findGroupByDescription(ctx, grupoDescricao);
+    const grupo = existingGroup
+      ? existingGroup
+      : await createGroup(ctx, { description: grupoDescricao });
+    console.log(
+      `[cadastrar-edital] grupo ${existingGroup ? 'reusado' : 'criado'}: ${grupo.id} — ${grupoDescricao}`,
+    );
 
     // ---- 5) Pra cada composição PRÓPRIA: cria + adiciona itens -----------------
     const uf = pickUF(licitacao.uf);
@@ -247,31 +256,37 @@ Deno.serve(async (req: Request) => {
       // TODO: inferir do tipo do item via LLM (futuro)
       const tipo: typeof COMPOSITION_TYPES[number] = 'PARE';
 
+      // Find-or-create composição por code (único: licitacao_id + item_codigo).
+      // Reusa em retry; só cria se nao achar.
       let created;
       try {
-        created = await createComposition(ctx, {
-          code: codigo,
-          // second_code também precisa ser único por composição — antes era
-          // o mesmo pra todas, o que disparava UNIQUE em MyBase.
-          second_code: `${licitacaoId.slice(0, 8)}_${comp.item_codigo
-            .replace(/[^A-Za-z0-9._-]/g, '_')
-            .slice(0, 40)}`,
-          description: descricao,
-          labor: false,
-          type: tipo,
-          unit: unidade,
-          local: uf,
-          rounding_type: ROUNDING_TYPE.TRUNCAR_2_CASAS,
-          is_sicro: false,
-          note: `Composição extraída do edital. Item ${comp.item_codigo}.`,
-        });
+        const existing = await findCompositionByCode(ctx, codigo);
+        if (existing) {
+          created = existing;
+          composicoesPuladas++;
+          console.log(`[cadastrar-edital] composição reusada: ${codigo} → ${existing.id}`);
+        } else {
+          created = await createComposition(ctx, {
+            code: codigo,
+            second_code: `${licitacaoId.slice(0, 8)}_${comp.item_codigo
+              .replace(/[^A-Za-z0-9._-]/g, '_')
+              .slice(0, 40)}`,
+            description: descricao,
+            labor: false,
+            type: tipo,
+            unit: unidade,
+            local: uf,
+            rounding_type: ROUNDING_TYPE.TRUNCAR_2_CASAS,
+            is_sicro: false,
+            note: `Composição extraída do edital. Item ${comp.item_codigo}.`,
+          });
+          composicoesCriadas++;
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         warnings.push(`Composição "${codigo}" — falhou: ${msg}`);
         continue;
       }
-
-      composicoesCriadas++;
 
       // Adiciona sub-itens da composição própria.
       // Cada sub-item pode ser COMPOSICAO ou INSUMO (MAT/EQUIPAMENTO).
@@ -289,7 +304,11 @@ Deno.serve(async (req: Request) => {
           is_resource: s.classe !== 'COMPOSICAO',
         }));
 
-      if (items.length > 0) {
+      // Se reusou uma composição que já tem itens, NÃO adiciona de novo
+      // (evita duplicar). Só adiciona se está vazia (recover de attempt
+      // que criou comp mas falhou no addItems).
+      const itensExistentes = ((created as { items?: unknown[] }).items ?? []).length;
+      if (items.length > 0 && itensExistentes === 0) {
         try {
           await addItemsToComposition(ctx, created.id, items);
           itensAdicionados += items.length;

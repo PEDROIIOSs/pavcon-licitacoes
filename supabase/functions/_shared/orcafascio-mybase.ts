@@ -243,6 +243,23 @@ export async function getGroup(ctx: OpContext, id: string): Promise<GroupRecord>
   );
 }
 
+/** Busca grupo por description. Retorna null se nenhum existir.
+ * Útil pra idempotência (retry sem 422 'já está utilizada'). */
+export async function findGroupByDescription(
+  ctx: OpContext,
+  description: string,
+): Promise<GroupRecord | null> {
+  // Pagina até achar OU acabar
+  for (let page = 1; page <= 10; page++) {
+    const r = await listGroups(ctx, page);
+    const match = (r.records ?? []).find((g) => g.description === description);
+    if (match) return match;
+    if (!r.records || r.records.length === 0) return null;
+    if (r.total != null && page * 10 >= r.total) return null;
+  }
+  return null;
+}
+
 // ----- Resources -----
 
 export async function listResources(
