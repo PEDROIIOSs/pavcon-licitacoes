@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ExtractionPanel } from './extraction-panel';
 import { PollRefresher } from './poll-refresher';
+import { ProposalCard } from './proposal-card';
 import type { ExtractedItem } from './actions';
 
 export const metadata = { title: 'Orçamento — Pavcon' };
@@ -195,6 +196,18 @@ export default async function LicitacaoDetailPage({
               )}
           </section>
         )}
+
+        <ProposalCard
+          licitacaoId={licitacao.id}
+          status={licitacao.status}
+          bdiEdital={Number(licitacao.bdi_referencia_edital ?? 22)}
+          totalEdital={totalComBdi}
+          proposta={{
+            desconto_percentual: licitacao.desconto_percentual,
+            valor_proposta_pavcon: licitacao.valor_proposta_pavcon,
+            orcafascio_proposta_budget_id: licitacao.orcafascio_proposta_budget_id,
+          }}
+        />
 
         <ExtractionPanel
           licitacaoId={licitacao.id}

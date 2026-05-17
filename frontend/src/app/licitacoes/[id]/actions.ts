@@ -668,6 +668,160 @@ export async function cadastrarOrcamentoCompleto(
   };
 }
 
+// Cadastra a PROPOSTA READEQUADA: 2º orçamento no Orçafascio com BDI
+// reduzido (equivalente matemático a desconto linear no preço total).
+//
+// Math: aplicar desconto X% em cada preço unitário com BDI é o mesmo que
+// reduzir o multiplicador (1+BDI) por (1-X%). Logo:
+//   BDI_proposta = (1+BDI_edital) × (1-desconto%) - 1
+// Ex: BDI 22% + desconto 10% → BDI_proposta = 1.22*0.9 - 1 = 9.8%
+//
+// Pré-requisito: orçamento BASE já criado (fase1_concluida). Aproveita as
+// composições próprias do MyBase (não duplica). Salva desconto + valor da
+// proposta em licitacoes pra mostrar no dashboard.
+export async function cadastrarProposta(
+  licitacaoId: string,
+  descontoPercentual: number,
+): Promise<ActionResult & {
+  budget_id?: string;
+  budget_url?: string;
+  bdi_proposta?: number;
+  bdi_edital?: number;
+  valor_edital?: number;
+  valor_proposta?: number;
+  economia?: number;
+  warnings?: string[];
+}> {
+  if (!Number.isFinite(descontoPercentual) || descontoPercentual <= 0 || descontoPercentual >= 100) {
+    return { error: 'Desconto deve ser entre 0% e 100% (exclusivo).' };
+  }
+
+  const supabase = await createClient();
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return { error: 'Não autenticado.' };
+
+  const admin = createAdminClient();
+
+  // Valida estado: precisa estar em fase1_concluida (orçamento base existe)
+  const { data: lic, error: licErr } = await admin
+    .from('licitacoes')
+    .select('id, status, bdi_referencia_edital, titulo')
+    .eq('id', licitacaoId)
+    .maybeSingle();
+  if (licErr || !lic) return { error: 'Licitação não encontrada.' };
+  if (lic.status !== 'fase1_concluida') {
+    return {
+      error: `Precisa cadastrar o orçamento base primeiro. Status atual: "${lic.status}".`,
+    };
+  }
+
+  // Lê BDI do cabecalho extraído (mais confiável que o do licitacoes)
+  const { data: extr } = await admin
+    .from('extracoes_ocr')
+    .select('json_corrigido, json_extraido')
+    .eq('licitacao_id', licitacaoId)
+    .in('status', ['sucesso', 'revisada_humano'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const cabecalho = ((extr?.json_corrigido ?? extr?.json_extraido) as
+    { cabecalho?: { bdi_percentual?: number | string } } | null)?.cabecalho;
+  const bdiEdital = Number(
+    cabecalho?.bdi_percentual ?? lic.bdi_referencia_edital ?? 22,
+  );
+  if (!Number.isFinite(bdiEdital) || bdiEdital < 0) {
+    return { error: `BDI do edital inválido (${bdiEdital}).` };
+  }
+
+  // BDI da proposta = (1+bdi/100)*(1-desc/100)*100 - 100
+  const bdiProposta = (1 + bdiEdital / 100) * (1 - descontoPercentual / 100) * 100 - 100;
+  if (bdiProposta < 0) {
+    return {
+      error: `Desconto ${descontoPercentual}% inviável: BDI ficaria negativo (${bdiProposta.toFixed(2)}%). Reduza o desconto.`,
+    };
+  }
+
+  // Calcula valor total do edital (soma de preco_total dos itens 'servico')
+  const { data: comps } = await admin
+    .from('composicoes_extraidas')
+    .select('preco_total')
+    .eq('licitacao_id', licitacaoId)
+    .eq('tipo_linha', 'servico');
+  const valorEdital = (comps ?? []).reduce(
+    (sum, c) => sum + Number(c.preco_total ?? 0),
+    0,
+  );
+  const valorProposta = valorEdital * (1 - descontoPercentual / 100);
+  const economia = valorEdital - valorProposta;
+
+  // Pega credencial WEB
+  const { data: creds } = await supabase
+    .from('api_credentials')
+    .select('id, metadata')
+    .eq('provider', 'orcafascio')
+    .eq('ativo', true);
+  const cred = (creds ?? []).find(
+    (c) => (c.metadata as { auth_type?: string } | null)?.auth_type === 'web',
+  );
+  if (!cred) {
+    return {
+      error: 'Nenhuma credencial Orçafascio com auth_type="web" cadastrada.',
+    };
+  }
+
+  // Chama Edge Function com proposta.bdi_override
+  const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/orcafascio-cadastrar-orcamento`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      licitacao_id: licitacaoId,
+      credential_id: cred.id,
+      proposta: {
+        bdi_override: bdiProposta,
+        titulo_prefix: `PROPOSTA ${descontoPercentual.toFixed(2)}% - `,
+      },
+    }),
+  });
+  const text = await res.text();
+  let body: Record<string, unknown> = {};
+  try { body = JSON.parse(text); } catch {}
+
+  if (!res.ok) {
+    return {
+      error: `Cadastro da proposta falhou (${res.status}): ${(body.error as string) ?? text.slice(0, 300)}`,
+      details: body.details ?? null,
+    };
+  }
+
+  // Persiste desconto + valor + budget_id da proposta
+  await admin
+    .from('licitacoes')
+    .update({
+      desconto_percentual: descontoPercentual,
+      valor_proposta_pavcon: valorProposta,
+      orcafascio_proposta_budget_id: (body.budget_id as string | undefined) ?? null,
+    })
+    .eq('id', licitacaoId);
+
+  revalidatePath(`/licitacoes/${licitacaoId}`);
+
+  return {
+    ok: true,
+    budget_id: body.budget_id as string | undefined,
+    budget_url: body.budget_url as string | undefined,
+    bdi_proposta: bdiProposta,
+    bdi_edital: bdiEdital,
+    valor_edital: valorEdital,
+    valor_proposta: valorProposta,
+    economia,
+    warnings: body.warnings as string[] | undefined,
+  };
+}
+
 // Limpa o estado do Orçafascio pra esta licitação e volta o status pra
 // criando_composicoes_edital (onde o botão MyBase fica visível novamente).
 // Útil quando alguma chamada Orçafascio falhou no meio e o usuário quer

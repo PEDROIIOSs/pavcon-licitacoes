@@ -58,6 +58,16 @@ interface RequestBody {
   licitacao_id?: string;
   credential_id?: string;
   trace_id?: string;
+  /** Quando preenchido, cria uma 2ª versão do orçamento como PROPOSTA
+   * (mantém composições/itens iguais, só ajusta BDI e título). Reusa o
+   * MyBase do orçamento base — não duplica composições próprias. */
+  proposta?: {
+    /** Sobrescreve o BDI calculado do cabecalho. Use pra aplicar desconto
+     * linear: bdi_proposta = (1+bdi_edital)*(1-desconto%) - 1 */
+    bdi_override?: number;
+    /** Prefixo no título do orçamento. Default: 'PROPOSTA - ' */
+    titulo_prefix?: string;
+  };
 }
 
 const ERR_AUTH_TO_HTTP: Record<OrcafascioWebError['code'], number> = {
@@ -150,6 +160,7 @@ Deno.serve(async (req: Request) => {
   if (!credentialId) return errorResponse(400, 'credential_id é obrigatório (web auth_type=web).');
 
   const traceId = body.trace_id ?? crypto.randomUUID();
+  const isProposta = body.proposta != null;
   const admin = getServiceRoleClient();
 
   try {
@@ -190,7 +201,11 @@ Deno.serve(async (req: Request) => {
       cabecalho?: Record<string, unknown>;
     } | null;
     const cabecalho = json?.cabecalho ?? null;
-    const bdiPct = Number(cabecalho?.bdi_percentual ?? licitacao.bdi_referencia_edital ?? 22);
+    // BDI da edital — ou override quando estamos criando uma PROPOSTA com desconto
+    const bdiEdital = Number(cabecalho?.bdi_percentual ?? licitacao.bdi_referencia_edital ?? 22);
+    const bdiPct = body.proposta?.bdi_override != null
+      ? Number(body.proposta.bdi_override)
+      : bdiEdital;
     const leisHorista = Number(cabecalho?.leis_sociais_percentual ?? 113.78);
     const comDesoneracao = Boolean(cabecalho?.com_desoneracao);
     const basesUtilizadas = Array.isArray(cabecalho?.bases_utilizadas)
@@ -213,7 +228,8 @@ Deno.serve(async (req: Request) => {
     }
 
     // ---- 2) Transição: criando_orcamento_base --------------------------------
-    if (['aguardando_revisao_humana', 'criando_composicoes_edital'].includes(licitacao.status)) {
+    // PROPOSTA: não transiciona status (orçamento base já existe e está fase1_concluida)
+    if (!isProposta && ['aguardando_revisao_humana', 'criando_composicoes_edital'].includes(licitacao.status)) {
       // Vai pra criando_composicoes_edital se estiver em aguardando_revisao_humana
       if (licitacao.status === 'aguardando_revisao_humana') {
         await admin.from('licitacoes').update({ status: 'criando_composicoes_edital' }).eq('id', licitacaoId);
@@ -235,8 +251,9 @@ Deno.serve(async (req: Request) => {
     // de unicidade no Orçafascio (caso o orçamentista crie múltiplos pra mesma obra).
     const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
     const baseCod = (licitacao.municipio ?? 'OBRA').toUpperCase().slice(0, 30);
-    const codigo = `${baseCod} ${stamp}`.slice(0, 50);
-    const descricao = (licitacao.titulo ?? 'Orçamento gerado pelo bot').slice(0, 250);
+    const tituloPrefix = body.proposta?.titulo_prefix ?? (isProposta ? 'PROPOSTA - ' : '');
+    const codigo = `${isProposta ? 'PROP ' : ''}${baseCod} ${stamp}`.slice(0, 50);
+    const descricao = `${tituloPrefix}${licitacao.titulo ?? 'Orçamento gerado pelo bot'}`.slice(0, 250);
 
     const { budget_id } = await createBudget(ctx, {
       codigo,
@@ -389,13 +406,16 @@ Deno.serve(async (req: Request) => {
     }
 
     // ---- 9) Persiste budget_id na licitação + transição --------------------
-    await admin
-      .from('licitacoes')
-      .update({
-        status: 'fase1_concluida',
-        fase1_concluida_em: new Date().toISOString(),
-      })
-      .eq('id', licitacaoId);
+    // PROPOSTA: não toca no status (orçamento base mantém fase1_concluida)
+    if (!isProposta) {
+      await admin
+        .from('licitacoes')
+        .update({
+          status: 'fase1_concluida',
+          fase1_concluida_em: new Date().toISOString(),
+        })
+        .eq('id', licitacaoId);
+    }
 
     // Atualiza extracoes_ocr ou outra tabela com o budget_id pra rastreamento
     // (a tabela licitacoes não tem campo orcafascio_orcamento_id atualmente —
@@ -418,8 +438,9 @@ Deno.serve(async (req: Request) => {
         : 'Abra o Orçafascio na URL acima pra revisar. O bot configurou cabeçalho, bases, BDI, encargos sociais e adicionou todas as composições.',
     });
   } catch (err) {
-    // Em falha, transiciona licitação pra erro
-    if (licitacaoId) {
+    // Em falha, transiciona licitação pra erro (mas NÃO pra proposta —
+    // erro na proposta não pode quebrar o status do orçamento base)
+    if (licitacaoId && !isProposta) {
       await admin.from('licitacoes').update({ status: 'erro' }).eq('id', licitacaoId);
     }
     if (err instanceof OrcafascioWebError) {
