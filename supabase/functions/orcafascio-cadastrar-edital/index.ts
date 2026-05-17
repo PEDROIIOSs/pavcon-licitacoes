@@ -58,11 +58,14 @@ import {
   COMPOSITION_TYPES,
   createComposition,
   createGroup,
+  createResource,
   findCompositionByCode,
   findGroupByDescription,
+  findResourceByCode,
   fonteToBank,
   OrcafascioApiError,
   pickUF,
+  RESOURCE_TYPE,
   ROUNDING_TYPE,
   type CompositionItem,
 } from '../_shared/orcafascio-mybase.ts';
@@ -91,7 +94,9 @@ interface ComposicaoPropriaItem {
   codigo: string | null;
   fonte: string;
   descricao: string;
+  unidade: string | null;
   coeficiente: number | null;
+  preco_unitario: number | null;
 }
 
 const ERR_AUTH_TO_HTTP: Record<OrcafascioAuthError['code'], number> = {
@@ -171,7 +176,7 @@ Deno.serve(async (req: Request) => {
     // a UI do Orçafascio acaba alfabetizando os sub-itens.
     const { data: subItens, error: subErr } = await admin
       .from('composicao_propria_itens')
-      .select('composicao_extraida_id, classe, codigo, fonte, descricao, coeficiente, ordem')
+      .select('composicao_extraida_id, classe, codigo, fonte, descricao, unidade, coeficiente, preco_unitario, ordem')
       .in('composicao_extraida_id', composicaoIds)
       .order('ordem', { ascending: true });
     if (subErr) {
@@ -229,8 +234,64 @@ Deno.serve(async (req: Request) => {
       `[cadastrar-edital] grupo ${existingGroup ? 'reusado' : 'criado'}: ${grupo.id} — ${grupoDescricao}`,
     );
 
-    // ---- 5) Pra cada composição PRÓPRIA: cria + adiciona itens -----------------
+    // ---- 4.5) Pré-cria resources auxiliares pra sub-composições PROPRIA --------
+    // Editais frequentemente têm composições próprias que internamente referenciam
+    // OUTRAS composições próprias auxiliares (ex: PARALELEPIPEDO+FRETE dentro de
+    // PAVIMENTAÇÃO). Essas auxiliares não viram linha do orçamento — só servem
+    // de "categoria de custo" interna. No MyBase do Orçafascio, isso é resolvido
+    // tratando-as como RESOURCES (insumos com preço fixo).
+    //
+    // Sem isso: add-items envia { bank: 'MYBASE', code: '07', is_resource: false }
+    // → Orçafascio busca composição com code='07', não acha → 500.
     const uf = pickUF(licitacao.uf);
+    const auxSubItens = (subItens ?? []).filter(
+      (s) => s.fonte === 'PROPRIA' && s.classe === 'COMPOSICAO' && s.codigo,
+    );
+    const auxByOriginalCode = new Map<string, { resource_code: string }>();
+    if (auxSubItens.length > 0) {
+      // Dedup por código (com a 1ª descrição/preço/unidade encontrados)
+      const uniques = new Map<string, ComposicaoPropriaItem>();
+      for (const s of auxSubItens as ComposicaoPropriaItem[]) {
+        if (!uniques.has(s.codigo!)) uniques.set(s.codigo!, s);
+      }
+      console.log(
+        `[cadastrar-edital] ${uniques.size} sub-composições PROPRIA auxiliares pra cadastrar como Resource`,
+      );
+
+      for (const aux of uniques.values()) {
+        // Code único por licitação pra não colidir entre editais
+        const auxCode = `AUX_${licitacaoId.slice(0, 8)}_${aux.codigo!}`.slice(0, 50);
+        try {
+          const existing = await findResourceByCode(ctx, auxCode);
+          if (existing) {
+            auxByOriginalCode.set(aux.codigo!, { resource_code: existing.code });
+            continue;
+          }
+          const preco = aux.preco_unitario != null ? Number(aux.preco_unitario) : 0;
+          const resource = await createResource(ctx, {
+            group_id: grupo.id,
+            code: auxCode,
+            description: (aux.descricao ?? `Sub-composição auxiliar ${aux.codigo}`).slice(0, 500),
+            type: RESOURCE_TYPE.OUTROS,
+            unit: (aux.unidade ?? 'un').slice(0, 20),
+            local: uf,
+            // Mesmo preço nos 4 campos — não desonerado/desonerado/improdutivo
+            // (o cálculo correto vem do BDI + leis sociais do orçamento)
+            pnd: preco,
+            pd: preco,
+            pndi: preco,
+            pdi: preco,
+            note: `Auxiliar do edital ${licitacao.numero_edital ?? licitacao.id.slice(0, 8)}. Código original "${aux.codigo}".`,
+          });
+          auxByOriginalCode.set(aux.codigo!, { resource_code: resource.code });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          warnings.push(`Resource auxiliar "${auxCode}" — falhou: ${msg.slice(0, 200)}`);
+        }
+      }
+    }
+
+    // ---- 5) Pra cada composição PRÓPRIA: cria + adiciona itens -----------------
     let composicoesCriadas = 0;
     let composicoesPuladas = 0;
     let itensAdicionados = 0;
@@ -300,17 +361,35 @@ Deno.serve(async (req: Request) => {
       // Cada sub-item pode ser COMPOSICAO ou INSUMO (MAT/EQUIPAMENTO).
       // Orçafascio exige is_resource pra distinguir — sem isso, 500 quando
       // mistura COMPOSICAO + INSUMO na mesma composição.
+      //
+      // Sub-composições PROPRIA auxiliares (ex: codigo "07" PARALELEPIPEDO)
+      // foram pré-cadastradas como RESOURCES no MyBase no passo 4.5. Aqui
+      // substituímos o codigo original pelo code do resource e marcamos
+      // is_resource: true.
       const subs = subItensByCompId.get(comp.id) ?? [];
       const items: CompositionItem[] = subs
         .filter((s) => s.codigo && s.coeficiente != null && s.coeficiente > 0)
-        .map((s) => ({
-          bank: fonteToBank(s.fonte),
-          code: s.codigo!,
-          qty: s.coeficiente!,
-          // classe='COMPOSICAO' → is_resource:false; outros (INSUMO, MAT,
-          // EQUIPAMENTO) → is_resource:true (são "recursos"/insumos)
-          is_resource: s.classe !== 'COMPOSICAO',
-        }));
+        .map((s) => {
+          const isAuxPropria = s.fonte === 'PROPRIA' && s.classe === 'COMPOSICAO';
+          const aux = isAuxPropria ? auxByOriginalCode.get(s.codigo!) : null;
+          if (aux) {
+            // Substitui pela referência ao resource auxiliar
+            return {
+              bank: 'MYBASE',
+              code: aux.resource_code,
+              qty: s.coeficiente!,
+              is_resource: true,
+            };
+          }
+          return {
+            bank: fonteToBank(s.fonte),
+            code: s.codigo!,
+            qty: s.coeficiente!,
+            // classe='COMPOSICAO' → is_resource:false; outros (INSUMO, MAT,
+            // EQUIPAMENTO) → is_resource:true (são "recursos"/insumos)
+            is_resource: s.classe !== 'COMPOSICAO',
+          };
+        });
 
       // Se reusou uma composição que já tem itens, NÃO adiciona de novo
       // (evita duplicar). Só adiciona se está vazia (recover de attempt
