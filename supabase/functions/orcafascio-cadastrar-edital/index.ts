@@ -277,7 +277,10 @@ Deno.serve(async (req: Request) => {
             type: tipo,
             unit: unidade,
             local: uf,
-            rounding_type: ROUNDING_TYPE.TRUNCAR_2_CASAS,
+            // ARREDONDAR (half-up) bate melhor com o padrão TCU/edital.
+            // TRUNCAR_2_CASAS estava criando diffs de centavos no preço
+            // unitário final da composição.
+            rounding_type: ROUNDING_TYPE.ARREDONDAR,
             is_sicro: false,
             note: `Composição extraída do edital. Item ${comp.item_codigo}.`,
           });
