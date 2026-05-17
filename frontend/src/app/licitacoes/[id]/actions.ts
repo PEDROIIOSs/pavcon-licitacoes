@@ -316,6 +316,46 @@ export async function importarExtracaoManual(
     ms: Date.now() - t0,
   });
 
+  // Atualiza campos do cabeçalho na licitação (BDI, bases, municipio, etc.).
+  // Faltava: sem isso, orcafascio-cadastrar-edital builda grupos sem municipio
+  // (gera nome ambíguo e conflita em retries), e cadastrar-orcamento perde o
+  // BDI default. Roda BEFORE de criar a extracao_ocr porque o save dos itens
+  // depende da licitação estar consistente.
+  const cabecalho = (parsed.cabecalho ?? {}) as Record<string, unknown>;
+  const bases = Array.isArray(cabecalho.bases_utilizadas)
+    ? (cabecalho.bases_utilizadas as string[])
+        .map((b) => {
+          const u = String(b).toUpperCase().trim();
+          // Normaliza variantes que viram do LLM pra o enum fonte_referencia
+          if (u.startsWith('SICRO')) return 'SICRO';
+          if (u.startsWith('SINAPI')) return 'SINAPI';
+          if (u.startsWith('SEINFRA')) return 'SEINFRA';
+          if (u.startsWith('ORSE')) return 'ORSE';
+          if (u.startsWith('SBC')) return 'SBC';
+          return u;
+        })
+        .filter((b) => ['SINAPI', 'SICRO', 'SEINFRA', 'ORSE', 'SBC', 'PROPRIA', 'OUTRA'].includes(b))
+    : null;
+  const ufRaw = cabecalho.uf;
+  const uf = typeof ufRaw === 'string' ? ufRaw.toUpperCase().slice(0, 2) : null;
+  const bdiNum = cabecalho.bdi_percentual != null
+    ? Number(cabecalho.bdi_percentual)
+    : null;
+  const leisNum = cabecalho.leis_sociais_percentual != null
+    ? Number(cabecalho.leis_sociais_percentual)
+    : null;
+  await admin
+    .from('licitacoes')
+    .update({
+      municipio: cabecalho.municipio ?? null,
+      uf,
+      orgao_licitante: cabecalho.orgao ?? null,
+      bdi_referencia_edital: bdiNum,
+      leis_sociais_referencia: leisNum,
+      ...(bases && bases.length > 0 ? { bases_referencia: bases } : {}),
+    })
+    .eq('id', licitacaoId);
+
   // Cria extração
   const meta = SOURCE_LABELS[source] ?? SOURCE_LABELS.outro;
   const { data: extr, error: extrErr } = await admin
