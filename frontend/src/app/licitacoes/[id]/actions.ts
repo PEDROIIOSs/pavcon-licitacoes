@@ -561,10 +561,59 @@ export async function cadastrarOrcamentoCompleto(
   leis_sociais_horista?: number;
   bancos_configurados?: string[];
   warnings?: string[];
+  mybase?: {
+    composicoes_criadas: number;
+    itens_adicionados: number;
+    warnings?: string[];
+  };
 }> {
   const supabase = await createClient();
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) return { error: 'Não autenticado.' };
+
+  // PASSO 1 IMPLÍCITO: se existem PROPRIA sem orcafascio_composition_id,
+  // roda o cadastro no MyBase primeiro. Sem isso, as PROPRIA vão pro
+  // orçamento com valor R$ 0,00. Usuário avançado pode pular usando o
+  // botão azul direto, mas o caminho normal é fazer tudo em uma jogada.
+  const { data: pendentes } = await supabase
+    .from('composicoes_extraidas')
+    .select('id')
+    .eq('licitacao_id', licitacaoId)
+    .eq('fonte', 'PROPRIA')
+    .eq('tipo_linha', 'servico')
+    .is('orcafascio_composition_id', null);
+
+  let mybaseResult: {
+    composicoes_criadas: number;
+    itens_adicionados: number;
+    warnings?: string[];
+  } | undefined;
+
+  if (pendentes && pendentes.length > 0) {
+    // Garante status compatível com cadastrar-edital (criando_composicoes_edital).
+    // Se status estiver em aguardando_revisao_humana, transiciona.
+    const { data: licStatus } = await supabase
+      .from('licitacoes')
+      .select('status')
+      .eq('id', licitacaoId)
+      .maybeSingle();
+    if (licStatus?.status === 'aguardando_revisao_humana') {
+      await supabase
+        .from('licitacoes')
+        .update({ status: 'criando_composicoes_edital' })
+        .eq('id', licitacaoId);
+    }
+
+    const mybase = await cadastrarNoOrcafascio(licitacaoId);
+    if (mybase?.error) {
+      return { error: `Falha no Passo 1 (MyBase): ${mybase.error}` };
+    }
+    mybaseResult = {
+      composicoes_criadas: mybase.composicoes_criadas ?? 0,
+      itens_adicionados: mybase.itens_adicionados ?? 0,
+      warnings: mybase.warnings,
+    };
+  }
 
   // Busca a credencial WEB (auth_type='web') — diferente da API (auth_type='api')
   const { data: creds, error: credErr } = await supabase
@@ -615,6 +664,7 @@ export async function cadastrarOrcamentoCompleto(
     leis_sociais_horista: body.leis_sociais_horista as number | undefined,
     bancos_configurados: body.bancos_configurados as string[] | undefined,
     warnings: body.warnings as string[] | undefined,
+    mybase: mybaseResult,
   };
 }
 

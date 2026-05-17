@@ -74,6 +74,11 @@ export function ExtractionPanel({
     leis_sociais_horista?: number;
     bancos_configurados?: string[];
     warnings?: string[];
+    mybase?: {
+      composicoes_criadas: number;
+      itens_adicionados: number;
+      warnings?: string[];
+    };
   } | null>(null);
 
   const canStart = (status === 'rascunho' || status === 'aguardando_extracao') &&
@@ -168,6 +173,7 @@ export function ExtractionPanel({
           leis_sociais_horista: r.leis_sociais_horista,
           bancos_configurados: r.bancos_configurados,
           warnings: r.warnings,
+          mybase: r.mybase,
         });
       }
     });
@@ -342,7 +348,7 @@ export function ExtractionPanel({
             </details>
           )}
           <p className="mt-2 text-xs text-emerald-800">
-            <strong>Próximo passo:</strong> abra o Orçafascio, crie um novo Orçamento apontando pra pasta criada e importe as composições.
+            <strong>Próximo passo:</strong> rode o Passo 2 (botão roxo) pra criar o orçamento completo no Orçafascio referenciando essa pasta. Ou — mais simples — pule esse passo e use direto o botão roxo, que faz Passo 1 + Passo 2 numa só.
           </p>
         </div>
       )}
@@ -358,19 +364,15 @@ export function ExtractionPanel({
           <div className="space-y-3 rounded-md border border-purple-200 bg-purple-50 p-4">
             <div>
               <p className="text-sm font-medium text-purple-900">
-                🚀 Passo 2 — Cadastrar orçamento completo no Orçafascio
+                🚀 Cadastrar orçamento completo no Orçafascio (tudo automático)
               </p>
               <p className="mt-1 text-xs text-purple-800">
-                Cria o orçamento com cabeçalho, BDI, leis sociais, 3 bancos
-                (SINAPI/SICRO3/ORSE) e adiciona todas as etapas + composições em batch
-                único. Composições PROPRIAS referenciam o MyBase do Passo 1.
+                Roda <strong>Passo 1 + Passo 2</strong> em sequência: cadastra as
+                composições próprias no MyBase (se ainda não estiverem) e em
+                seguida cria o orçamento com cabeçalho, BDI, leis sociais, 3 bancos
+                (SINAPI/SICRO3/ORSE) e todas as etapas + composições. Um clique faz
+                tudo.
               </p>
-              {status === 'aguardando_revisao_humana' && (
-                <p className="mt-2 rounded bg-amber-100 px-2 py-1 text-[11px] text-amber-900">
-                  ⚠ Você ainda não rodou o Passo 1 (MyBase). As composições PROPRIAS
-                  vão pro orçamento com valor R$ 0,00.
-                </p>
-              )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <button
@@ -378,7 +380,7 @@ export function ExtractionPanel({
                 disabled={isPending}
                 className="rounded-md bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50"
               >
-                {isPending ? 'Cadastrando…' : '🚀 Cadastrar orçamento completo'}
+                {isPending ? 'Cadastrando…' : '🚀 Cadastrar tudo no Orçafascio'}
               </button>
               <button
                 onClick={handleResetOrcafascio}
@@ -406,6 +408,14 @@ export function ExtractionPanel({
             >
               {orcamentoResult.budget_url}
             </a>
+          )}
+          {orcamentoResult.mybase && (
+            <p className="rounded bg-emerald-100 px-2 py-1 text-[11px] text-emerald-900">
+              ↺ Passo 1 (MyBase) também foi rodado automaticamente:{' '}
+              <strong>{orcamentoResult.mybase.composicoes_criadas}</strong>{' '}
+              composições próprias criadas com{' '}
+              <strong>{orcamentoResult.mybase.itens_adicionados}</strong> sub-itens.
+            </p>
           )}
           <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-emerald-800">
             <dt>Budget ID:</dt>
