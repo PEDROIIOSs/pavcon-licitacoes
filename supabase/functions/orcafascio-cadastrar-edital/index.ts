@@ -231,9 +231,11 @@ Deno.serve(async (req: Request) => {
       }
 
       // MyBase tem UNIQUE em code+second_code por company. Pra evitar
-      // 'Codigo já está utilizada' em retries (ou em outras licitações que
-      // reusam item_codigo curto tipo "1.1"), prefixamos com o id da licitação.
-      const sanitized = (comp.codigo ?? comp.item_codigo)
+      // 'Codigo já está utilizada' em retries E pra garantir unicidade entre
+      // composições PRÓPRIAS da mesma licitação, usamos SEMPRE o item_codigo
+      // (ex: "1.1", "2.3") — o comp.codigo pode vir como "COMPOSICAO" genérico
+      // (vinda do LLM) que se repete pra todas, gerando colisão.
+      const sanitized = comp.item_codigo
         .replace(/[^A-Za-z0-9._-]/g, '_')
         .slice(0, 30);
       const codigo = `${licitacaoId.slice(0, 8)}_${sanitized}`.slice(0, 50);
