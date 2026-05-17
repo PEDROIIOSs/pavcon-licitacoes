@@ -167,15 +167,18 @@ Deno.serve(async (req: Request) => {
     }
 
     const composicaoIds = composicoes.map((c) => c.id);
+    // ordem ASC pra preservar a sequência do edital — sem ordem explícita,
+    // a UI do Orçafascio acaba alfabetizando os sub-itens.
     const { data: subItens, error: subErr } = await admin
       .from('composicao_propria_itens')
-      .select('composicao_extraida_id, classe, codigo, fonte, descricao, coeficiente')
-      .in('composicao_extraida_id', composicaoIds);
+      .select('composicao_extraida_id, classe, codigo, fonte, descricao, coeficiente, ordem')
+      .in('composicao_extraida_id', composicaoIds)
+      .order('ordem', { ascending: true });
     if (subErr) {
       return errorResponse(500, 'Falha ao ler composicao_propria_itens.', subErr.message);
     }
 
-    // Agrupa sub-itens por composição
+    // Agrupa sub-itens por composição (ordem já garantida pelo SELECT acima)
     const subItensByCompId = new Map<string, ComposicaoPropriaItem[]>();
     for (const s of (subItens ?? [])) {
       const list = subItensByCompId.get(s.composicao_extraida_id) ?? [];
