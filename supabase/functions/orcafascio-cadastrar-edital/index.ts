@@ -416,10 +416,29 @@ Deno.serve(async (req: Request) => {
           await addItemsToComposition(ctx, created.id, items);
           itensAdicionados += items.length;
         } catch (err) {
+          // Batch falhou com 500 (HTML genérico, sem detalhes do item ruim).
+          // Tenta item por item pra identificar o(s) problemático(s) — os
+          // que funcionarem ficam adicionados, os que falharem viram warning
+          // específico com o code/bank/qty pra debug.
           const msg = err instanceof Error ? err.message : String(err);
-          warnings.push(
-            `Composição "${codigo}" criada (${created.id}) mas adição de ${items.length} itens falhou: ${msg}`,
-          );
+          console.log(`[cadastrar-edital] batch ${codigo} falhou (${msg}), tentando item a item`);
+          let oneByOneOk = 0;
+          const failures: string[] = [];
+          for (const it of items) {
+            try {
+              await addItemsToComposition(ctx, created.id, [it]);
+              oneByOneOk++;
+            } catch (e2) {
+              const m2 = e2 instanceof Error ? e2.message : String(e2);
+              failures.push(`${it.bank}/${it.code} (qty ${it.qty}, is_resource ${it.is_resource}) → ${m2.slice(0, 100)}`);
+            }
+          }
+          itensAdicionados += oneByOneOk;
+          if (failures.length > 0) {
+            warnings.push(
+              `Composição "${codigo}": ${oneByOneOk}/${items.length} itens OK, falhas: ${failures.join('; ')}`,
+            );
+          }
         }
       }
 
