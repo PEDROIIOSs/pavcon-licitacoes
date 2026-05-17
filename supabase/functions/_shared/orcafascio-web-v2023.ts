@@ -330,24 +330,30 @@ async function fetchBasesFormDefaults(
   const form = m[0];
   const banks = new Set<string>();
   const defaults: Record<string, { data?: string; estado?: string }> = {};
-  // Itera por cada <select name="{algo}_data" ou {algo}_estado">
-  const selectRe = /<select[^>]+name="([^"]+?)_(data|estado)"[^>]*>([\s\S]*?)<\/select>/g;
+  // Orçafascio mistura aspas simples e duplas no HTML. Aceita as duas.
+  const Q = `["']`;
+  const selectRe = new RegExp(
+    `<select[^>]+name=${Q}([^"']+?)_(data|estado)${Q}[^>]*>([\\s\\S]*?)<\\/select>`,
+    'g',
+  );
   let sm: RegExpExecArray | null;
   while ((sm = selectRe.exec(form)) !== null) {
     const bank = sm[1];
     const field = sm[2] as 'data' | 'estado';
     const optionsHtml = sm[3];
-    // Pega option com selected, senão o primeiro
-    const selectedMatch = optionsHtml.match(/<option[^>]*value="([^"]+)"[^>]*selected/);
-    const firstMatch = optionsHtml.match(/<option[^>]*value="([^"]+)"/);
-    const value = selectedMatch?.[1] ?? firstMatch?.[1];
+    const selectedRe = new RegExp(`<option[^>]*value=${Q}([^"']+)${Q}[^>]*selected`);
+    const firstRe = new RegExp(`<option[^>]*value=${Q}([^"']+)${Q}`);
+    const value = optionsHtml.match(selectedRe)?.[1] ?? optionsHtml.match(firstRe)?.[1];
     if (!value) continue;
     banks.add(bank);
     if (!defaults[bank]) defaults[bank] = {};
     defaults[bank][field] = value;
   }
-  // Tambem coleta nomes dos bancos via checkboxes (caso algum banco só tenha relatorio)
-  const cbRe = /<input[^>]+type="checkbox"[^>]+name="([^"]+?)_exibir_relatorio"/g;
+  // Também coleta nomes dos bancos via checkboxes (caso algum banco só tenha relatorio)
+  const cbRe = new RegExp(
+    `<input[^>]+type=${Q}checkbox${Q}[^>]+name=${Q}([^"']+?)_exibir_relatorio${Q}`,
+    'g',
+  );
   while ((sm = cbRe.exec(form)) !== null) {
     banks.add(sm[1]);
   }
