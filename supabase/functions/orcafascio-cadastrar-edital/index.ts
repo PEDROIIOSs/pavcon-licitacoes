@@ -273,7 +273,10 @@ Deno.serve(async (req: Request) => {
 
       composicoesCriadas++;
 
-      // Adiciona itens (sub-insumos da composição própria)
+      // Adiciona sub-itens da composição própria.
+      // Cada sub-item pode ser COMPOSICAO ou INSUMO (MAT/EQUIPAMENTO).
+      // Orçafascio exige is_resource pra distinguir — sem isso, 500 quando
+      // mistura COMPOSICAO + INSUMO na mesma composição.
       const subs = subItensByCompId.get(comp.id) ?? [];
       const items: CompositionItem[] = subs
         .filter((s) => s.codigo && s.coeficiente != null && s.coeficiente > 0)
@@ -281,6 +284,9 @@ Deno.serve(async (req: Request) => {
           bank: fonteToBank(s.fonte),
           code: s.codigo!,
           qty: s.coeficiente!,
+          // classe='COMPOSICAO' → is_resource:false; outros (INSUMO, MAT,
+          // EQUIPAMENTO) → is_resource:true (são "recursos"/insumos)
+          is_resource: s.classe !== 'COMPOSICAO',
         }));
 
       if (items.length > 0) {

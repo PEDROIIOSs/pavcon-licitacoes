@@ -143,8 +143,10 @@ export interface CreateCompositionInput {
 
 export interface CompositionItem {
   bank: string;              // "SINAPI" | "SBC" | "SICRO" | "ORSE" | ...
-  code: string;              // Código do insumo no banco
+  code: string;              // Código do insumo (recurso) OU da composição no banco
   qty: number;               // Coeficiente
+  is_resource: boolean;      // true = insumo (resource), false = composição
+                             // Sem isso, Orçafascio retorna 500 quando o item é INSUMO.
 }
 
 export interface AddItemsInput {
