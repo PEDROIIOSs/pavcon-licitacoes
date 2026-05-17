@@ -413,6 +413,8 @@ Deno.serve(async (req: Request) => {
         .update({
           status: 'fase1_concluida',
           fase1_concluida_em: new Date().toISOString(),
+          orcafascio_orcamento_base_id: budget_id,
+          orcafascio_orcamento_base_codigo: codigo,
         })
         .eq('id', licitacaoId);
     }

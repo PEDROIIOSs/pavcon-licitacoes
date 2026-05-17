@@ -942,6 +942,79 @@ export async function calcularProposta(
   };
 }
 
+// Cadastra a proposta no Orçafascio: clona o orçamento base + aplica ajuste de valor.
+// O valor final passado pro Orçafascio é o calculado pela nossa regra MO-aware
+// (calcularProposta), garantindo que o total respeite "desconto não incide sobre MO".
+// O Orçafascio aplica o ajuste linearmente — o total bate, mas a divisão interna
+// por item segue o ajuste deles (desconta MO proporcionalmente). Documentamos isso.
+export async function cadastrarPropostaOrcafascio(
+  licitacaoId: string,
+  descontoPercentual: number,
+): Promise<{
+  ok?: boolean;
+  error?: string;
+  budget_id?: string;
+  budget_url?: string;
+  valor_aplicado?: number;
+  warnings?: string[];
+}> {
+  const supabase = await createClient();
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return { error: 'Não autenticado.' };
+
+  // 1) Calcula a proposta com regra MO (idempotente — pode rodar de novo)
+  const proposta = await calcularProposta(licitacaoId, descontoPercentual);
+  if (proposta.error) return { error: `Falha no cálculo MO: ${proposta.error}` };
+
+  // 2) Pega credencial WEB
+  const { data: creds } = await supabase
+    .from('api_credentials')
+    .select('id, metadata')
+    .eq('provider', 'orcafascio')
+    .eq('ativo', true);
+  const cred = (creds ?? []).find(
+    (c) => (c.metadata as { auth_type?: string } | null)?.auth_type === 'web',
+  );
+  if (!cred) {
+    return { error: 'Nenhuma credencial Orçafascio "web" cadastrada.' };
+  }
+
+  // 3) Chama Edge Function com o valor já MO-aware
+  const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/orcafascio-cadastrar-proposta`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      licitacao_id: licitacaoId,
+      credential_id: cred.id,
+      desconto_percentual: descontoPercentual,
+      valor_proposta: proposta.total_proposta_com_bdi,
+    }),
+  });
+  const text = await res.text();
+  let body: Record<string, unknown> = {};
+  try { body = JSON.parse(text); } catch {}
+
+  revalidatePath(`/licitacoes/${licitacaoId}`);
+
+  if (!res.ok) {
+    return {
+      error: `Cadastro falhou (${res.status}): ${(body.error as string) ?? text.slice(0, 300)}`,
+    };
+  }
+
+  return {
+    ok: true,
+    budget_id: body.budget_id as string | undefined,
+    budget_url: body.budget_url as string | undefined,
+    valor_aplicado: body.valor_aplicado as number | undefined,
+    warnings: body.warnings as string[] | undefined,
+  };
+}
+
 // Gera CSV pronto pra abrir no Excel/Google Sheets com a proposta detalhada.
 // Retorna string CSV (cliente faz o download via Blob).
 // CSV com separador ; pra Excel pt-BR não confundir com decimal.

@@ -202,6 +202,7 @@ export default async function LicitacaoDetailPage({
           status={licitacao.status}
           bdiEdital={Number(licitacao.bdi_referencia_edital ?? 22)}
           totalEdital={totalComBdi}
+          orcamentoBaseId={licitacao.orcafascio_orcamento_base_id ?? null}
           proposta={{
             desconto_percentual: licitacao.desconto_percentual,
             valor_proposta_pavcon: licitacao.valor_proposta_pavcon,

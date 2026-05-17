@@ -459,6 +459,59 @@ export async function addItemsBatch(
 // Helpers
 // =============================================================================
 
+/** Duplica um orçamento existente. Retorna o budget_id do novo orçamento.
+ * Endpoint do Orçafascio: POST /orc/orcamentos/copiar?id={source}.
+ * O servidor responde com 302 → /orc/orcamentos/{novo_id}, de onde extraímos
+ * o ID do orçamento copiado. */
+export async function copyBudget(
+  ctx: OpContext,
+  sourceBudgetId: string,
+): Promise<{ budget_id: string }> {
+  const result = await postForm<{ __redirect?: string | null }>(
+    ctx,
+    `/orc/orcamentos/copiar?id=${sourceBudgetId}`,
+    {},
+    'copyBudget',
+  );
+  const loc = result.__redirect ?? '';
+  const m = loc.match(/\/orc\/orcamentos\/([a-f0-9]{24})/);
+  if (!m || m[1] === sourceBudgetId) {
+    throw new OrcafascioV2023Error(
+      0,
+      `copyBudget: não consegui extrair novo budget_id do redirect (loc=${loc})`,
+      { redirect: loc, source: sourceBudgetId },
+    );
+  }
+  return { budget_id: m[1] };
+}
+
+/** "Ajustar valor" do Orçafascio: aplica um fator linear sobre todos os
+ * itens do orçamento até bater o valor final desejado. Endpoint em 2 passos:
+ *   - GET /v2023/orc/orcamentos/{id}/ajustar_valor_passo_1 (form com input final_price)
+ *   - POST /v2023/orc/orcamentos/{id}/ajustar_valor_passo_2 (aplica o ajuste)
+ *
+ * ATENÇÃO: o ajuste é linear sobre TODOS os custos (inclui MO). Pra atender
+ * a regra de licitação "desconto não incide sobre MO", o `valorFinal` deve
+ * ser pré-calculado pelo nosso backend já respeitando a MO; aceitamos que a
+ * distribuição interna no Orçafascio fique levemente "errada" (descontando
+ * MO proporcionalmente), mas o total final bate com nosso cálculo. */
+export async function ajustarValor(
+  ctx: OpContext,
+  budgetId: string,
+  valorFinal: number,
+): Promise<void> {
+  await postForm(
+    ctx,
+    `/v2023/orc/orcamentos/${budgetId}/ajustar_valor_passo_2`,
+    {
+      // O Orçafascio aceita ponto OU vírgula como separador decimal.
+      // Usa ponto pra consistência com locale en-US do form.
+      final_price: valorFinal.toFixed(2),
+    },
+    'ajustarValor',
+  );
+}
+
 /** Gera UUID v4 — usado pra preencher base_id de itens novos */
 export function uuidv4(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {

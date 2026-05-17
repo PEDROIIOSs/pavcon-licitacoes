@@ -2,13 +2,14 @@
 
 import { useState, useTransition } from 'react';
 import { formatBRL } from '@/lib/utils';
-import { calcularProposta, exportPropostaCSV } from './actions';
+import { cadastrarPropostaOrcafascio, calcularProposta, exportPropostaCSV } from './actions';
 
 interface Props {
   licitacaoId: string;
   status: string;
   bdiEdital: number;
   totalEdital: number;
+  orcamentoBaseId: string | null;
   proposta: {
     desconto_percentual: number | null;
     valor_proposta_pavcon: number | null;
@@ -49,6 +50,7 @@ export function ProposalCard({
   status,
   bdiEdital,
   totalEdital,
+  orcamentoBaseId,
   proposta,
 }: Props) {
   const [descontoStr, setDescontoStr] = useState<string>(
@@ -60,6 +62,12 @@ export function ProposalCard({
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CalcResult | null>(null);
   const [showTable, setShowTable] = useState(false);
+  const [cadastroResult, setCadastroResult] = useState<{
+    budget_id?: string;
+    budget_url?: string;
+    valor_aplicado?: number;
+    warnings?: string[];
+  } | null>(null);
 
   const desconto = Number(descontoStr.replace(',', '.'));
   const descontoValido = Number.isFinite(desconto) && desconto > 0 && desconto < 100;
@@ -75,6 +83,38 @@ export function ProposalCard({
       } else {
         setResult(r as CalcResult);
         setShowTable(true);
+      }
+    });
+  }
+
+  function handleCadastrarOrcafascio() {
+    if (!descontoValido) return;
+    if (!orcamentoBaseId) {
+      setError(
+        'Orçamento base não encontrado no Orçafascio. Cadastre o orçamento base primeiro ou re-rode o Passo 2.',
+      );
+      return;
+    }
+    if (
+      !confirm(
+        `Cadastrar proposta no Orçafascio?\n\nIsso vai:\n• COPIAR o orçamento base no Orçafascio\n• Aplicar "ajustar valor" pra bater R$ ${result?.total_proposta_com_bdi.toFixed(2) ?? '???'}\n\nOBSERVAÇÃO: o Orçafascio aplica o ajuste de forma LINEAR (proporcional em todos itens, inclusive MO). O total final bate com o nosso cálculo MO-aware, mas a divisão interna por item segue o ajuste linear. Pra auditoria detalhada, use o CSV baixado.\n\nContinuar?`,
+      )
+    ) {
+      return;
+    }
+    setError(null);
+    setCadastroResult(null);
+    startTransition(async () => {
+      const r = await cadastrarPropostaOrcafascio(licitacaoId, desconto);
+      if (r.error) {
+        setError(r.error);
+      } else {
+        setCadastroResult({
+          budget_id: r.budget_id,
+          budget_url: r.budget_url,
+          valor_aplicado: r.valor_aplicado,
+          warnings: r.warnings,
+        });
       }
     });
   }
@@ -192,13 +232,59 @@ export function ProposalCard({
           📥 Baixar CSV
         </button>
         <button
-          disabled
-          className="rounded-md border border-zinc-300 bg-zinc-100 px-3 py-2 text-sm font-medium text-zinc-500"
-          title="Cadastro automático no Orçafascio com pu customizado por item — próxima iteração"
+          onClick={handleCadastrarOrcafascio}
+          disabled={isPending || !result || !orcamentoBaseId}
+          className="rounded-md bg-purple-600 px-3 py-2 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50"
+          title={
+            !orcamentoBaseId
+              ? 'Orçamento base não encontrado — recadastre o Passo 2 primeiro'
+              : 'Copia o orçamento base + aplica "ajustar valor" (linear)'
+          }
         >
-          🚀 Cadastrar no Orçafascio (em breve)
+          🚀 Cadastrar no Orçafascio
         </button>
       </div>
+
+      {cadastroResult && (
+        <div className="space-y-2 rounded-md border border-purple-300 bg-purple-50 p-4 text-sm">
+          <p className="font-semibold text-purple-900">
+            ✅ Proposta cadastrada no Orçafascio!
+          </p>
+          {cadastroResult.budget_url && (
+            <a
+              href={cadastroResult.budget_url}
+              target="_blank"
+              rel="noreferrer"
+              className="block rounded-md bg-white px-3 py-2 text-xs text-purple-800 underline hover:bg-purple-100"
+            >
+              {cadastroResult.budget_url}
+            </a>
+          )}
+          {cadastroResult.valor_aplicado != null && (
+            <p className="text-xs text-purple-800">
+              Valor aplicado: <strong>{formatBRL(cadastroResult.valor_aplicado)}</strong>
+            </p>
+          )}
+          <p className="rounded bg-amber-50 p-2 text-[11px] text-amber-900">
+            ⚠ Atenção: o Orçafascio aplicou o ajuste de forma <strong>linear</strong> em
+            todos os itens. O <strong>total bate</strong> com nosso cálculo MO-aware,
+            mas a divisão interna por item segue o ajuste deles. Pra a auditoria
+            detalhada da regra de MO, use o CSV baixado.
+          </p>
+          {cadastroResult.warnings && cadastroResult.warnings.length > 0 && (
+            <details className="mt-1 rounded bg-amber-50 p-2 text-[11px] text-amber-900">
+              <summary className="cursor-pointer">
+                {cadastroResult.warnings.length} aviso(s)
+              </summary>
+              <ul className="mt-1 list-disc pl-4">
+                {cadastroResult.warnings.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
 
       {result && (
         <div className="space-y-3 rounded-md border border-amber-200 bg-white p-4 text-sm">
