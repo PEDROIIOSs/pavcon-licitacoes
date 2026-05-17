@@ -244,7 +244,17 @@ Deno.serve(async (req: Request) => {
       licitacaoId,
     });
 
-    const ctx = await createContext(admin, session, credentialId, user.id, licitacaoId, traceId);
+    const ctx = await createContext(
+      admin, session, credentialId, user.id, licitacaoId, traceId,
+      // Recovery: se sessão cacheada expirou silenciosamente no Orçafascio,
+      // refaz login (forceRefresh) e tenta de novo o CSRF.
+      () => authenticateOrcafascioWeb(admin, credentialId, {
+        callerUserId: user.id,
+        forceRefresh: true,
+        traceId,
+        licitacaoId,
+      }),
+    );
 
     // ---- 4) Cria o budget ----------------------------------------------------
     // Codigo precisa ser único — adiciona suffix com data+hora pra evitar conflito

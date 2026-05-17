@@ -107,8 +107,10 @@ export class OrcafascioV2023Error extends Error {
 // CSRF
 // =============================================================================
 
-/** Busca o authenticity_token (CSRF do Rails) a partir do meta tag da página. */
-export async function fetchCsrfToken(session: OrcafascioWebSession): Promise<string> {
+/** Busca o authenticity_token (CSRF do Rails) a partir do meta tag da página.
+ * Se a sessão expirou silenciosamente (302→/login), retorna `null` pra o
+ * caller poder refazer login. Não joga: caller decide refresh ou erro final. */
+export async function fetchCsrfToken(session: OrcafascioWebSession): Promise<string | null> {
   const r = await fetch(`${BASE}/orc/orcamentos/new`, {
     method: 'GET',
     headers: {
@@ -118,13 +120,19 @@ export async function fetchCsrfToken(session: OrcafascioWebSession): Promise<str
     },
     redirect: 'manual',
   });
+  const location = r.headers.get('location') ?? '';
+  if ((r.status === 302 || r.status === 303) && location.includes('/login')) {
+    // Sessão expirou no servidor (load balancer/AWSALB ou logout silencioso).
+    // Retorna null pra caller refazer login.
+    return null;
+  }
   const html = await r.text();
   const m = html.match(/<meta\s+name=["']csrf-token["']\s+content=["']([^"']+)["']/i);
   if (!m) {
     throw new OrcafascioV2023Error(
       r.status,
       'CSRF token não encontrado em /orc/orcamentos/new',
-      { status: r.status, body_excerpt: html.slice(0, 300) },
+      { status: r.status, location, body_excerpt: html.slice(0, 300) },
     );
   }
   return m[1];
@@ -531,6 +539,12 @@ export function fonteToBase(fonte: string | null | undefined): string {
 
 /**
  * Cria o OpContext (utilitário). Use isso depois de autenticar.
+ *
+ * Auto-recovery de sessão: a sessão cacheada no DB pode parecer válida (TTL
+ * 4h) mas o Orçafascio expirou silenciosamente (AWSALB rotou pra outra
+ * instance, logout em outro device, etc). Detectamos via 302→/login e
+ * refazemos login forçando refresh. Sem isso, todo retry depois de pausa
+ * longa gerava "CSRF token não encontrado".
  */
 export async function createContext(
   admin: SupabaseClient,
@@ -539,7 +553,23 @@ export async function createContext(
   callerUserId: string,
   licitacaoId?: string | null,
   traceId?: string,
+  /** Callback pra forçar refresh da sessão (passamos authenticateOrcafascioWeb
+   * curried com forceRefresh:true desde o caller). Sem isso, fica sem o
+   * caminho de recovery e devolve erro original. */
+  refreshSession?: () => Promise<OrcafascioWebSession>,
 ): Promise<OpContext> {
-  const csrfToken = await fetchCsrfToken(session);
+  let csrfToken = await fetchCsrfToken(session);
+  if (csrfToken == null && refreshSession) {
+    console.warn('[orcafascio-web-v2023] sessão expirou — refazendo login');
+    session = await refreshSession();
+    csrfToken = await fetchCsrfToken(session);
+  }
+  if (csrfToken == null) {
+    throw new OrcafascioV2023Error(
+      502,
+      'Sessão Orçafascio expirou e refresh falhou (CSRF token ainda ausente).',
+      null,
+    );
+  }
   return { admin, session, credentialId, callerUserId, csrfToken, licitacaoId, traceId };
 }

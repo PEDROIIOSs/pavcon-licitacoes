@@ -59,6 +59,7 @@ import {
   createComposition,
   createGroup,
   createResource,
+  deleteResource,
   findCompositionByCode,
   findGroupByDescription,
   findResourceByCode,
@@ -261,13 +262,28 @@ Deno.serve(async (req: Request) => {
       for (const aux of uniques.values()) {
         // Code único por licitação pra não colidir entre editais
         const auxCode = `AUX_${licitacaoId.slice(0, 8)}_${aux.codigo!}`.slice(0, 50);
+        const preco = aux.preco_unitario != null ? Number(aux.preco_unitario) : 0;
         try {
           const existing = await findResourceByCode(ctx, auxCode);
           if (existing) {
-            auxByOriginalCode.set(aux.codigo!, { resource_code: existing.code });
-            continue;
+            // Se o preço existente está zerado (criado por versão buggy
+            // anterior), apaga e recria com o preço correto.
+            const existingPnd = Number(
+              existing.locals?.[uf]?.pnd ?? 0,
+            );
+            if (existingPnd > 0 || preco === 0) {
+              auxByOriginalCode.set(aux.codigo!, { resource_code: existing.code });
+              continue;
+            }
+            console.log(
+              `[cadastrar-edital] resource ${auxCode} existente com pnd=${existingPnd} — recriando com ${preco}`,
+            );
+            await deleteResource(ctx, existing.id).catch((e) => {
+              warnings.push(
+                `Falha ao apagar resource zerado ${auxCode}: ${e instanceof Error ? e.message.slice(0, 100) : String(e)}`,
+              );
+            });
           }
-          const preco = aux.preco_unitario != null ? Number(aux.preco_unitario) : 0;
           const resource = await createResource(ctx, {
             group_id: grupo.id,
             code: auxCode,

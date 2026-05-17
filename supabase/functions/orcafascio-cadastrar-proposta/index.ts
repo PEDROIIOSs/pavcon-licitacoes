@@ -141,7 +141,15 @@ Deno.serve(async (req: Request) => {
       traceId,
       licitacaoId,
     });
-    const ctx = await createContext(admin, session, credentialId, user.id, licitacaoId, traceId);
+    const ctx = await createContext(
+      admin, session, credentialId, user.id, licitacaoId, traceId,
+      () => authenticateOrcafascioWeb(admin, credentialId, {
+        callerUserId: user.id,
+        forceRefresh: true,
+        traceId,
+        licitacaoId,
+      }),
+    );
 
     // ---- 4) Copia o orçamento base ------------------------------------------
     const { budget_id: novoBudgetId } = await copyBudget(ctx, sourceBudgetId);

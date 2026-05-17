@@ -306,6 +306,11 @@ export async function createResource(
   ctx: OpContext,
   input: CreateResourceInput,
 ): Promise<ResourceRecord> {
+  // OBSERVADO: a API ignora os campos flat pnd/pd/pndi/pdi quando o resource
+  // é criado e armazena tudo zerado. O Orçafascio retorna `locals: {UF: {pnd,..}}`
+  // — enviamos a estrutura aninhada (que bate com a representação canônica)
+  // E também os campos flat (que algumas versões podem aceitar). Isso resolveu
+  // o bug de "Resource auxiliar criado com R$ 0,00" identificado em tests.
   const body = {
     group_id: input.group_id,
     code: input.code,
@@ -314,6 +319,14 @@ export async function createResource(
     type: input.type,
     unit: input.unit,
     local: input.local,
+    locals: {
+      [input.local]: {
+        pnd: input.pnd,
+        pd: input.pd,
+        pndi: input.pndi,
+        pdi: input.pdi,
+      },
+    },
     pnd: input.pnd,
     pd: input.pd,
     pndi: input.pndi,
