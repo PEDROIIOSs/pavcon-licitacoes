@@ -348,12 +348,21 @@ Deno.serve(async (req: Request) => {
         });
         etapasCriadas++;
       } else if (c.tipo_linha === 'servico') {
-        // Pra fonte=PROPRIA, usar a composição cadastrada no MyBase (via cadastrar-edital)
+        // Pra fonte=PROPRIA, usar a composição cadastrada no MyBase (via cadastrar-edital).
+        // Importante: `code` é o código humano da composição (ex: '2da42d41_1.1'),
+        // não o MongoDB ObjectId. `public_banco_id` é o ObjectId — esse é o
+        // ponteiro real pra MyBase. Enviar ObjectId no `code` faz Orçafascio
+        // não conseguir resolver e mostra valor R$ 0,00.
         const isPropria = c.fonte === 'PROPRIA';
+        const mybaseCode = `${licitacaoId.slice(0, 8)}_${(c.item_codigo as string)
+          .replace(/[^A-Za-z0-9._-]/g, '_')
+          .slice(0, 30)}`;
         const code = isPropria
-          ? (c.orcafascio_composition_id ?? c.codigo ?? '')
+          ? mybaseCode
           : (c.codigo ?? '');
         if (!code) continue; // sem código, pula
+        if (isPropria && !c.orcafascio_composition_id) continue; // PROPRIA sem MyBase = sem valor, pula
+
         items.push({
           kind: 'composition',
           itemization: c.item_codigo,
