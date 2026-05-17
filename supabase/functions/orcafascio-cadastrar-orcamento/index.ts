@@ -58,15 +58,16 @@ interface RequestBody {
   licitacao_id?: string;
   credential_id?: string;
   trace_id?: string;
-  /** Quando preenchido, cria uma 2ª versão do orçamento como PROPOSTA
-   * (mantém composições/itens iguais, só ajusta BDI e título). Reusa o
-   * MyBase do orçamento base — não duplica composições próprias. */
+  /** Cria uma 2ª versão como PROPOSTA. BDI permanece igual ao edital
+   * (regra de licitação: desconto não incide sobre BDI). Pra aplicar o
+   * desconto, futuras iterações vão enviar pu_override por item — esta
+   * versão da Edge Function ainda não suporta isso (TODO). */
   proposta?: {
-    /** Sobrescreve o BDI calculado do cabecalho. Use pra aplicar desconto
-     * linear: bdi_proposta = (1+bdi_edital)*(1-desconto%) - 1 */
-    bdi_override?: number;
     /** Prefixo no título do orçamento. Default: 'PROPOSTA - ' */
     titulo_prefix?: string;
+    /** TODO: pu sobrescrito por item_codigo pra aplicar desconto
+     * seletivo (não incide sobre mão de obra). */
+    pus_override?: Record<string, number>;
   };
 }
 
@@ -201,11 +202,10 @@ Deno.serve(async (req: Request) => {
       cabecalho?: Record<string, unknown>;
     } | null;
     const cabecalho = json?.cabecalho ?? null;
-    // BDI da edital — ou override quando estamos criando uma PROPOSTA com desconto
+    // BDI sempre = BDI do edital (regra de licitação: desconto não incide
+    // sobre BDI, ele permanece igual entre edital e proposta).
     const bdiEdital = Number(cabecalho?.bdi_percentual ?? licitacao.bdi_referencia_edital ?? 22);
-    const bdiPct = body.proposta?.bdi_override != null
-      ? Number(body.proposta.bdi_override)
-      : bdiEdital;
+    const bdiPct = bdiEdital;
     const leisHorista = Number(cabecalho?.leis_sociais_percentual ?? 113.78);
     const comDesoneracao = Boolean(cabecalho?.com_desoneracao);
     const basesUtilizadas = Array.isArray(cabecalho?.bases_utilizadas)

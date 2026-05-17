@@ -668,54 +668,111 @@ export async function cadastrarOrcamentoCompleto(
   };
 }
 
-// Cadastra a PROPOSTA READEQUADA: 2º orçamento no Orçafascio com BDI
-// reduzido (equivalente matemático a desconto linear no preço total).
+// =============================================================================
+// Proposta Readequada — desconto linear seletivo (regras de licitação)
+// =============================================================================
+// Regras aplicadas:
+//   1. BDI da proposta = BDI do edital (NÃO se aplica desconto sobre o BDI).
+//   2. Desconto X% NÃO incide sobre custos de mão de obra (insumos com
+//      classe='MAO_DE_OBRA'). Só incide sobre materiais, equipamentos, etc.
 //
-// Math: aplicar desconto X% em cada preço unitário com BDI é o mesmo que
-// reduzir o multiplicador (1+BDI) por (1-X%). Logo:
-//   BDI_proposta = (1+BDI_edital) × (1-desconto%) - 1
-// Ex: BDI 22% + desconto 10% → BDI_proposta = 1.22*0.9 - 1 = 9.8%
+// Math (por item):
+//   custo_total_sem_BDI = pu_unitario_sem_BDI × quantidade
+//   custo_MO  = Σ (coef × pu) dos insumos com classe=MAO_DE_OBRA × quantidade
+//   custo_outros = custo_total_sem_BDI − custo_MO
+//   desconto_R$ = custo_outros × (desconto%/100)
+//   pu_proposta_sem_BDI = (custo_total_sem_BDI − desconto_R$) / quantidade
+//   pu_proposta_com_BDI = pu_proposta_sem_BDI × (1 + BDI/100)
 //
-// Pré-requisito: orçamento BASE já criado (fase1_concluida). Aproveita as
-// composições próprias do MyBase (não duplica). Salva desconto + valor da
-// proposta em licitacoes pra mostrar no dashboard.
-export async function cadastrarProposta(
+// Precisão da decomposição MO:
+//   - PROPRIA: exato (temos os sub-itens com classe no nosso banco)
+//   - SINAPI/SICRO/etc: estimado por banco via tabela hardcoded (próx iter:
+//     buscar do Orçafascio). % conservador defensável em primeira aproximação.
+
+const PCT_MO_DEFAULT_POR_BANCO: Record<string, number> = {
+  // Aproximações públicas — em obras civis típicas. Ajustar por edital.
+  SINAPI: 27,
+  SICRO: 15,
+  SICRO3: 15,
+  SEINFRA: 25,
+  ORSE: 25,
+  SBC: 25,
+  SETOP: 22,
+  EMBASA: 25,
+  OUTRA: 25,
+};
+
+interface PropostaItem {
+  item_codigo: string;
+  descricao: string;
+  fonte: string | null;
+  codigo: string | null;
+  quantidade: number;
+  unidade: string | null;
+  pu_edital_sem_bdi: number;
+  pu_edital_com_bdi: number;
+  total_edital: number;
+  custo_mo_item: number;
+  custo_outros_item: number;
+  pct_mo: number;
+  pu_proposta_sem_bdi: number;
+  pu_proposta_com_bdi: number;
+  total_proposta: number;
+  desconto_efetivo_item_pct: number;
+  metodo_mo: 'exato_propria' | 'estimado_banco' | 'sem_mo';
+  obs: string;
+}
+
+interface PropostaResult {
+  ok?: boolean;
+  error?: string;
+  bdi_edital: number;
+  desconto_solicitado_pct: number;
+  total_edital_com_bdi: number;
+  total_proposta_com_bdi: number;
+  economia: number;
+  desconto_efetivo_global_pct: number;
+  custo_mo_preservado: number;
+  custo_outros_descontavel: number;
+  itens: PropostaItem[];
+  alertas: string[];
+}
+
+// Calcula a proposta sem cadastrar no Orçafascio. Pode ser chamado várias
+// vezes pra ajustar o desconto e ver o impacto antes de gerar.
+export async function calcularProposta(
   licitacaoId: string,
   descontoPercentual: number,
-): Promise<ActionResult & {
-  budget_id?: string;
-  budget_url?: string;
-  bdi_proposta?: number;
-  bdi_edital?: number;
-  valor_edital?: number;
-  valor_proposta?: number;
-  economia?: number;
-  warnings?: string[];
-}> {
+): Promise<PropostaResult> {
+  const empty: PropostaResult = {
+    bdi_edital: 0,
+    desconto_solicitado_pct: descontoPercentual,
+    total_edital_com_bdi: 0,
+    total_proposta_com_bdi: 0,
+    economia: 0,
+    desconto_efetivo_global_pct: 0,
+    custo_mo_preservado: 0,
+    custo_outros_descontavel: 0,
+    itens: [],
+    alertas: [],
+  };
   if (!Number.isFinite(descontoPercentual) || descontoPercentual <= 0 || descontoPercentual >= 100) {
-    return { error: 'Desconto deve ser entre 0% e 100% (exclusivo).' };
+    return { ...empty, error: 'Desconto deve ser entre 0% e 100% (exclusivo).' };
   }
 
   const supabase = await createClient();
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session) return { error: 'Não autenticado.' };
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { ...empty, error: 'Não autenticado.' };
 
   const admin = createAdminClient();
 
-  // Valida estado: precisa estar em fase1_concluida (orçamento base existe)
-  const { data: lic, error: licErr } = await admin
+  const { data: lic } = await admin
     .from('licitacoes')
-    .select('id, status, bdi_referencia_edital, titulo')
+    .select('id, status, bdi_referencia_edital')
     .eq('id', licitacaoId)
     .maybeSingle();
-  if (licErr || !lic) return { error: 'Licitação não encontrada.' };
-  if (lic.status !== 'fase1_concluida') {
-    return {
-      error: `Precisa cadastrar o orçamento base primeiro. Status atual: "${lic.status}".`,
-    };
-  }
+  if (!lic) return { ...empty, error: 'Licitação não encontrada.' };
 
-  // Lê BDI do cabecalho extraído (mais confiável que o do licitacoes)
   const { data: extr } = await admin
     .from('extracoes_ocr')
     .select('json_corrigido, json_extraido')
@@ -726,84 +783,145 @@ export async function cadastrarProposta(
     .maybeSingle();
   const cabecalho = ((extr?.json_corrigido ?? extr?.json_extraido) as
     { cabecalho?: { bdi_percentual?: number | string } } | null)?.cabecalho;
-  const bdiEdital = Number(
-    cabecalho?.bdi_percentual ?? lic.bdi_referencia_edital ?? 22,
-  );
-  if (!Number.isFinite(bdiEdital) || bdiEdital < 0) {
-    return { error: `BDI do edital inválido (${bdiEdital}).` };
-  }
+  const bdiEdital = Number(cabecalho?.bdi_percentual ?? lic.bdi_referencia_edital ?? 22);
+  const bdiMul = 1 + bdiEdital / 100;
 
-  // BDI da proposta = (1+bdi/100)*(1-desc/100)*100 - 100
-  const bdiProposta = (1 + bdiEdital / 100) * (1 - descontoPercentual / 100) * 100 - 100;
-  if (bdiProposta < 0) {
-    return {
-      error: `Desconto ${descontoPercentual}% inviável: BDI ficaria negativo (${bdiProposta.toFixed(2)}%). Reduza o desconto.`,
-    };
-  }
-
-  // Calcula valor total do edital (soma de preco_total dos itens 'servico')
   const { data: comps } = await admin
     .from('composicoes_extraidas')
-    .select('preco_total')
+    .select(
+      'id, item_codigo, descricao, fonte, codigo, quantidade, unidade, preco_unitario_sem_bdi, preco_unitario_com_bdi, preco_total, tipo_linha, ordem',
+    )
     .eq('licitacao_id', licitacaoId)
-    .eq('tipo_linha', 'servico');
-  const valorEdital = (comps ?? []).reduce(
-    (sum, c) => sum + Number(c.preco_total ?? 0),
-    0,
-  );
-  const valorProposta = valorEdital * (1 - descontoPercentual / 100);
-  const economia = valorEdital - valorProposta;
+    .eq('tipo_linha', 'servico')
+    .order('ordem', { ascending: true });
 
-  // Pega credencial WEB
-  const { data: creds } = await supabase
-    .from('api_credentials')
-    .select('id, metadata')
-    .eq('provider', 'orcafascio')
-    .eq('ativo', true);
-  const cred = (creds ?? []).find(
-    (c) => (c.metadata as { auth_type?: string } | null)?.auth_type === 'web',
-  );
-  if (!cred) {
-    return {
-      error: 'Nenhuma credencial Orçafascio com auth_type="web" cadastrada.',
-    };
+  if (!comps || comps.length === 0) {
+    return { ...empty, bdi_edital: bdiEdital, error: 'Nenhuma composição extraída.' };
   }
 
-  // Chama Edge Function com proposta.bdi_override
-  const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/orcafascio-cadastrar-orcamento`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${session.access_token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      licitacao_id: licitacaoId,
-      credential_id: cred.id,
-      proposta: {
-        bdi_override: bdiProposta,
-        titulo_prefix: `PROPOSTA ${descontoPercentual.toFixed(2)}% - `,
-      },
-    }),
-  });
-  const text = await res.text();
-  let body: Record<string, unknown> = {};
-  try { body = JSON.parse(text); } catch {}
-
-  if (!res.ok) {
-    return {
-      error: `Cadastro da proposta falhou (${res.status}): ${(body.error as string) ?? text.slice(0, 300)}`,
-      details: body.details ?? null,
-    };
+  // Pega TODOS os sub-itens das composições PROPRIA pra calcular MO exato
+  const propriaIds = comps
+    .filter((c) => c.fonte === 'PROPRIA')
+    .map((c) => c.id);
+  const subitensPorComp = new Map<string, Array<{ classe: string; coeficiente: number; preco_unitario: number | null }>>();
+  if (propriaIds.length > 0) {
+    const { data: subs } = await admin
+      .from('composicao_propria_itens')
+      .select('composicao_extraida_id, classe, coeficiente, preco_unitario')
+      .in('composicao_extraida_id', propriaIds);
+    for (const s of subs ?? []) {
+      const k = s.composicao_extraida_id as string;
+      if (!subitensPorComp.has(k)) subitensPorComp.set(k, []);
+      subitensPorComp.get(k)!.push({
+        classe: String(s.classe ?? ''),
+        coeficiente: Number(s.coeficiente ?? 0),
+        preco_unitario: s.preco_unitario != null ? Number(s.preco_unitario) : null,
+      });
+    }
   }
 
-  // Persiste desconto + valor + budget_id da proposta
+  const itens: PropostaItem[] = [];
+  const alertas = new Set<string>();
+  let totalEditalCom = 0;
+  let totalPropostaCom = 0;
+  let totalMOPreservado = 0;
+  let totalOutrosDescontavel = 0;
+
+  for (const c of comps) {
+    const qty = Number(c.quantidade ?? 0);
+    const puEditalSem = Number(c.preco_unitario_sem_bdi ?? 0);
+    const puEditalCom = Number(c.preco_unitario_com_bdi ?? puEditalSem * bdiMul);
+    const totalEditalItem = puEditalCom * qty;
+    totalEditalCom += totalEditalItem;
+
+    // Calcula % de mão de obra do item
+    let pctMo = 0;
+    let metodo: PropostaItem['metodo_mo'] = 'sem_mo';
+    let obs = '';
+
+    if (c.fonte === 'PROPRIA') {
+      const subs = subitensPorComp.get(c.id) ?? [];
+      const moSum = subs
+        .filter((s) => s.classe === 'MAO_DE_OBRA')
+        .reduce((s, x) => s + x.coeficiente * (x.preco_unitario ?? 0), 0);
+      // O puEditalSem deveria ser ≈ Σ(coef*pu) dos sub-itens. Se for, dá o pct
+      // exato. Senão, é melhor estimar como ratio.
+      if (puEditalSem > 0) {
+        pctMo = Math.min(100, (moSum / puEditalSem) * 100);
+        metodo = 'exato_propria';
+      } else {
+        pctMo = PCT_MO_DEFAULT_POR_BANCO.OUTRA;
+        metodo = 'estimado_banco';
+        obs = 'PU edital zerado, usei % MO default';
+      }
+    } else if (c.fonte && c.fonte in PCT_MO_DEFAULT_POR_BANCO) {
+      pctMo = PCT_MO_DEFAULT_POR_BANCO[c.fonte];
+      metodo = 'estimado_banco';
+      obs = `% MO estimado por banco ${c.fonte} (${pctMo}%) — não auditado item a item`;
+      alertas.add(
+        `Composições ${c.fonte}: % MO estimado por média do banco. Pra precisão total, buscar decomposição real no Orçafascio (próx iteração).`,
+      );
+    } else if (c.fonte) {
+      pctMo = PCT_MO_DEFAULT_POR_BANCO.OUTRA;
+      metodo = 'estimado_banco';
+      obs = `Fonte ${c.fonte} não mapeada, usei ${pctMo}% MO default`;
+      alertas.add(`Fonte "${c.fonte}" sem % MO calibrado — usado fallback ${pctMo}%.`);
+    } else {
+      // Sem fonte → assume sem MO (composição manual sem decomposição)
+      pctMo = 0;
+      metodo = 'sem_mo';
+      obs = 'Sem fonte definida — desconto aplicado integralmente';
+    }
+
+    const custoTotalSemBdi = puEditalSem * qty;
+    const custoMoItem = custoTotalSemBdi * (pctMo / 100);
+    const custoOutrosItem = custoTotalSemBdi - custoMoItem;
+    const descontoR$Item = custoOutrosItem * (descontoPercentual / 100);
+    const custoTotalPropostaSemBdi = custoTotalSemBdi - descontoR$Item;
+    const puPropostaSem = qty > 0 ? custoTotalPropostaSemBdi / qty : 0;
+    const puPropostaCom = puPropostaSem * bdiMul;
+    const totalPropostaItem = puPropostaCom * qty;
+    totalPropostaCom += totalPropostaItem;
+    totalMOPreservado += custoMoItem * bdiMul;
+    totalOutrosDescontavel += custoOutrosItem * bdiMul;
+
+    const descontoEfetivoItemPct = totalEditalItem > 0
+      ? ((totalEditalItem - totalPropostaItem) / totalEditalItem) * 100
+      : 0;
+
+    itens.push({
+      item_codigo: c.item_codigo,
+      descricao: c.descricao,
+      fonte: c.fonte,
+      codigo: c.codigo,
+      quantidade: qty,
+      unidade: c.unidade,
+      pu_edital_sem_bdi: puEditalSem,
+      pu_edital_com_bdi: puEditalCom,
+      total_edital: totalEditalItem,
+      custo_mo_item: custoMoItem * bdiMul, // com BDI pra comparar com total
+      custo_outros_item: custoOutrosItem * bdiMul,
+      pct_mo: pctMo,
+      pu_proposta_sem_bdi: puPropostaSem,
+      pu_proposta_com_bdi: puPropostaCom,
+      total_proposta: totalPropostaItem,
+      desconto_efetivo_item_pct: descontoEfetivoItemPct,
+      metodo_mo: metodo,
+      obs,
+    });
+  }
+
+  const economia = totalEditalCom - totalPropostaCom;
+  const descontoEfetivoGlobalPct = totalEditalCom > 0
+    ? (economia / totalEditalCom) * 100
+    : 0;
+
+  // Persiste no banco
   await admin
     .from('licitacoes')
     .update({
       desconto_percentual: descontoPercentual,
-      valor_proposta_pavcon: valorProposta,
-      orcafascio_proposta_budget_id: (body.budget_id as string | undefined) ?? null,
+      valor_proposta_pavcon: totalPropostaCom,
     })
     .eq('id', licitacaoId);
 
@@ -811,15 +929,82 @@ export async function cadastrarProposta(
 
   return {
     ok: true,
-    budget_id: body.budget_id as string | undefined,
-    budget_url: body.budget_url as string | undefined,
-    bdi_proposta: bdiProposta,
     bdi_edital: bdiEdital,
-    valor_edital: valorEdital,
-    valor_proposta: valorProposta,
+    desconto_solicitado_pct: descontoPercentual,
+    total_edital_com_bdi: totalEditalCom,
+    total_proposta_com_bdi: totalPropostaCom,
     economia,
-    warnings: body.warnings as string[] | undefined,
+    desconto_efetivo_global_pct: descontoEfetivoGlobalPct,
+    custo_mo_preservado: totalMOPreservado,
+    custo_outros_descontavel: totalOutrosDescontavel,
+    itens,
+    alertas: Array.from(alertas),
   };
+}
+
+// Gera CSV pronto pra abrir no Excel/Google Sheets com a proposta detalhada.
+// Retorna string CSV (cliente faz o download via Blob).
+// CSV com separador ; pra Excel pt-BR não confundir com decimal.
+export async function exportPropostaCSV(
+  licitacaoId: string,
+  descontoPercentual: number,
+): Promise<{ ok?: boolean; error?: string; csv?: string; filename?: string }> {
+  const proposta = await calcularProposta(licitacaoId, descontoPercentual);
+  if (proposta.error) return { error: proposta.error };
+
+  const fmt = (n: number) => n.toFixed(2).replace('.', ',');
+  const esc = (s: string) => `"${s.replace(/"/g, '""')}"`;
+
+  const lines: string[] = [];
+  lines.push(
+    [
+      'Item',
+      'Descrição',
+      'Fonte',
+      'Código',
+      'Unidade',
+      'Qtd',
+      'PU Edital (com BDI)',
+      'Total Edital',
+      '% MO',
+      'Método MO',
+      'PU Proposta (com BDI)',
+      'Total Proposta',
+      'Desconto Efetivo %',
+      'Observação',
+    ].join(';'),
+  );
+  for (const it of proposta.itens) {
+    lines.push(
+      [
+        esc(it.item_codigo),
+        esc(it.descricao),
+        esc(it.fonte ?? ''),
+        esc(it.codigo ?? ''),
+        esc(it.unidade ?? ''),
+        fmt(it.quantidade),
+        fmt(it.pu_edital_com_bdi),
+        fmt(it.total_edital),
+        fmt(it.pct_mo),
+        esc(it.metodo_mo),
+        fmt(it.pu_proposta_com_bdi),
+        fmt(it.total_proposta),
+        fmt(it.desconto_efetivo_item_pct),
+        esc(it.obs),
+      ].join(';'),
+    );
+  }
+  lines.push('');
+  lines.push(`"RESUMO";"";"";"";"";"";"";${fmt(proposta.total_edital_com_bdi)};"";"";"";${fmt(proposta.total_proposta_com_bdi)};${fmt(proposta.desconto_efetivo_global_pct)};"Economia: ${fmt(proposta.economia)}"`);
+  lines.push(`"";;"BDI edital: ${fmt(proposta.bdi_edital)}%";"";"Desconto solicitado: ${fmt(descontoPercentual)}%";"";"";"";"";"";"";"";"";""`);
+  lines.push(`"";;"MO preservada: ${fmt(proposta.custo_mo_preservado)}";"";"Outros descontáveis: ${fmt(proposta.custo_outros_descontavel)}";"";"";"";"";"";"";"";"";""`);
+
+  // BOM UTF-8 pro Excel abrir acentos corretamente
+  const csv = '﻿' + lines.join('\r\n');
+  const stamp = new Date().toISOString().slice(0, 10);
+  const filename = `proposta_${licitacaoId.slice(0, 8)}_${descontoPercentual.toString().replace('.', '_')}pct_${stamp}.csv`;
+
+  return { ok: true, csv, filename };
 }
 
 // Limpa o estado do Orçafascio pra esta licitação e volta o status pra
