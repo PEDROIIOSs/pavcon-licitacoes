@@ -302,6 +302,27 @@ export async function findResourceByCode(
   return result.json as ResourceRecord;
 }
 
+/** Busca um resource cadastrado especificamente no MyBase (custom resources
+ * da empresa). O endpoint `/resources/find_by_code` cobre só resources do
+ * catálogo global (SINAPI etc) — pra MyBase precisa paginar via listResources.
+ *
+ * Esse caminho é mais lento (paginação) mas é o único disponível na API
+ * pública pra achar um resource do MyBase pelo code. Para até 30 páginas
+ * (~300 resources) — suficiente pra licitações típicas. */
+export async function findMyBaseResourceByCode(
+  ctx: OpContext,
+  code: string,
+): Promise<ResourceRecord | null> {
+  for (let page = 1; page <= 30; page++) {
+    const r = await listResources(ctx, page);
+    const match = (r.records ?? []).find((x) => x.code === code);
+    if (match) return match;
+    if (!r.records || r.records.length === 0) return null;
+    if (r.total != null && page * 10 >= r.total) return null;
+  }
+  return null;
+}
+
 export async function createResource(
   ctx: OpContext,
   input: CreateResourceInput,

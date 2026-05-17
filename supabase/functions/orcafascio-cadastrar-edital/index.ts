@@ -62,7 +62,7 @@ import {
   deleteResource,
   findCompositionByCode,
   findGroupByDescription,
-  findResourceByCode,
+  findMyBaseResourceByCode,
   fonteToBank,
   OrcafascioApiError,
   pickUF,
@@ -264,7 +264,7 @@ Deno.serve(async (req: Request) => {
         const auxCode = `AUX_${licitacaoId.slice(0, 8)}_${aux.codigo!}`.slice(0, 50);
         const preco = aux.preco_unitario != null ? Number(aux.preco_unitario) : 0;
         try {
-          const existing = await findResourceByCode(ctx, auxCode);
+          const existing = await findMyBaseResourceByCode(ctx, auxCode);
           if (existing) {
             // Se o preço existente está zerado (criado por versão buggy
             // anterior), apaga e recria com o preço correto.
