@@ -239,15 +239,16 @@ Deno.serve(async (req: Request) => {
         continue;
       }
 
-      // MyBase tem UNIQUE em code+second_code por company. Pra evitar
-      // 'Codigo já está utilizada' em retries E pra garantir unicidade entre
-      // composições PRÓPRIAS da mesma licitação, usamos SEMPRE o item_codigo
-      // (ex: "1.1", "2.3") — o comp.codigo pode vir como "COMPOSICAO" genérico
-      // (vinda do LLM) que se repete pra todas, gerando colisão.
+      // Code da composição no MyBase. Formato 'COMPOSIC_<item_codigo>':
+      // - mais legível na tela do orçamento (col CÓDIGO mostra 'COMPOSIC_1.1')
+      // - bate com o padrão do edital ('COMPOSIC', 'COMPOSIÇÃO' são genéricos)
+      // - sufixo item_codigo garante unicidade dentro da licitação
+      // OBS: companies com várias licitações podem ter colisão (mesmo item_codigo
+      // "1.1" em editais diferentes) — mas o find-or-create reusa, sem 422.
       const sanitized = comp.item_codigo
         .replace(/[^A-Za-z0-9._-]/g, '_')
-        .slice(0, 30);
-      const codigo = `${licitacaoId.slice(0, 8)}_${sanitized}`.slice(0, 50);
+        .slice(0, 40);
+      const codigo = `COMPOSIC_${sanitized}`.slice(0, 50);
       const descricao = (comp.descricao ?? 'Composição própria do edital').slice(0, 500);
       const unidade = (comp.unidade ?? 'Un').slice(0, 20);
 
@@ -268,9 +269,9 @@ Deno.serve(async (req: Request) => {
         } else {
           created = await createComposition(ctx, {
             code: codigo,
-            second_code: `${licitacaoId.slice(0, 8)}_${comp.item_codigo
+            second_code: `LICITACAO_${licitacaoId.slice(0, 8)}_${comp.item_codigo
               .replace(/[^A-Za-z0-9._-]/g, '_')
-              .slice(0, 40)}`,
+              .slice(0, 30)}`,
             description: descricao,
             labor: false,
             type: tipo,

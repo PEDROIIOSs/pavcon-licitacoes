@@ -353,17 +353,19 @@ Deno.serve(async (req: Request) => {
         etapasCriadas++;
       } else if (c.tipo_linha === 'servico') {
         // Pra fonte=PROPRIA, usar a composição cadastrada no MyBase (via cadastrar-edital).
-        // Importante: `public_banco_id` é o ObjectId do MyBase — esse é o
-        // ponteiro REAL que Orçafascio usa pra resolver a composição.
-        // `code` é só o que aparece na coluna CÓDIGO da tela do orçamento —
-        // pra PROPRIA, mantemos o valor do edital (ex: 'COMPOSICAO'/'COMPOSIC')
-        // pra ficar coerente com o orçamento base do órgão.
+        // `code` PRECISA ser o código humano da composição no MyBase (ex:
+        // '2da42d41_1.1'), não o ObjectId nem o valor genérico do edital.
+        // Quando enviamos `code` diferente do que está em MyBase, Orçafascio
+        // não resolve o public_banco_id → valor R$ 0,00 no orçamento.
         const isPropria = c.fonte === 'PROPRIA';
-        const code = isPropria
-          ? (c.codigo ?? 'COMPOSICAO') // valor extraído do edital pra display
-          : (c.codigo ?? '');
+        // PRECISA usar o MESMO formato de cadastrar-edital.ts pra Orçafascio
+        // achar a composição no MyBase via public_banco_id + code.
+        const mybaseCode = `COMPOSIC_${(c.item_codigo as string)
+          .replace(/[^A-Za-z0-9._-]/g, '_')
+          .slice(0, 40)}`;
+        const code = isPropria ? mybaseCode : (c.codigo ?? '');
         if (!code) continue;
-        if (isPropria && !c.orcafascio_composition_id) continue; // PROPRIA sem MyBase = pula
+        if (isPropria && !c.orcafascio_composition_id) continue;
 
         items.push({
           kind: 'composition',
