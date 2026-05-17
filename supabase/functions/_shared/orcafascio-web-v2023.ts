@@ -260,7 +260,11 @@ export async function createBudget(
   return { budget_id: m[1] };
 }
 
-/** Atualiza BDI do orçamento. */
+/** Atualiza BDI do orçamento.
+ * IMPORTANTE: a URL real do form é `/orc/orcamentos/update_bdi?id=...`
+ * (NÃO `/v2023/orc/...`). Fields são strings 'true'/'false', e o valor do
+ * BDI vai num input com `name="0"` (sim, literalmente "0"). Inspeção do
+ * HTML do Orçafascio confirmou esse layout. */
 export async function updateBdi(
   ctx: OpContext,
   budgetId: string,
@@ -268,17 +272,25 @@ export async function updateBdi(
 ): Promise<void> {
   await postForm(
     ctx,
-    `/v2023/orc/orcamentos/update_bdi?id=${budgetId}`,
+    `/orc/orcamentos/update_bdi?id=${budgetId}`,
     {
-      no_final: input.no_final !== false ? '1' : '0',
-      bdi_manual: String(input.bdi_manual),
-      base_bdi: String(input.base_bdi ?? input.bdi_manual),
+      // Radio: 'true' = BDI incide no preço final do orçamento (default Orçafascio).
+      // 'false' = incide no unitário (recomendado pelo TCU). Mantemos 'true' por compat.
+      no_final: input.no_final !== false ? 'true' : 'false',
+      // Checkbox bdi_manual — marca pra liberar o campo manual.
+      bdi_manual: 'true',
+      // Select base_bdi vazio = informar manualmente em vez de pegar BDI cadastrado.
+      base_bdi: '',
+      // Campo manual: name="0" — onde vai o número do BDI (formato BR aceita ponto ou vírgula).
+      '0': String(input.bdi_manual),
     },
     'updateBdi',
   );
 }
 
-/** Atualiza leis sociais (encargos) do orçamento. */
+/** Atualiza leis sociais (encargos) do orçamento.
+ * Fields são radios com value 'true'/'false' (não 1/0). charge_hourly/charge_monthly
+ * não existem no form — só horista/mensalista. */
 export async function updateLeisSociais(
   ctx: OpContext,
   budgetId: string,
@@ -288,10 +300,11 @@ export async function updateLeisSociais(
     ctx,
     `/v2023/orc/orcamentos/update_leis_sociais?id=${budgetId}`,
     {
-      desonerado: input.desonerado ? '1' : '0',
-      charge_manual: input.charge_manual ? '1' : '0',
-      charge_hourly: String(input.charge_hourly ?? 113.78),
-      charge_monthly: String(input.charge_monthly ?? 71.59),
+      desonerado: input.desonerado ? 'true' : 'false',
+      // charge_manual=true ativa os campos horista/mensalista pra valor manual
+      charge_manual: 'true',
+      // calcular=false não dispara recálculo automático (mantém os valores)
+      calcular: 'false',
       horista: String(input.horista ?? input.charge_hourly ?? 113.78),
       mensalista: String(input.mensalista ?? input.charge_monthly ?? 71.59),
     },
