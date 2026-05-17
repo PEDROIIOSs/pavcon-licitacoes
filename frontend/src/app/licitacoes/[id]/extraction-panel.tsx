@@ -5,6 +5,7 @@ import {
   approveExtraction,
   cadastrarNoOrcafascio,
   cadastrarOrcamentoCompleto,
+  resetOrcafascio,
   resetToDraft,
   saveExtractionEdits,
   startExtraction,
@@ -96,6 +97,23 @@ export function ExtractionPanel({
     setActionError(null);
     startTransition(async () => {
       const r = await resetToDraft(licitacaoId);
+      if (r?.error) setActionError(r.error);
+    });
+  }
+
+  function handleResetOrcafascio() {
+    if (
+      !confirm(
+        'Resetar Orçafascio?\n\nIsso:\n• Limpa os IDs MyBase salvos no nosso banco\n• Invalida a sessão web (próximo cadastro faz login fresco)\n• Volta status pra "criando composições" (botão azul reaparece)\n\nNão deleta nada do Orçafascio web — você precisa apagar manualmente as composições e o orçamento parcial em https://app.orcafascio.com.\n\nContinuar?',
+      )
+    ) {
+      return;
+    }
+    setActionError(null);
+    setCadastroResult(null);
+    setOrcamentoResult(null);
+    startTransition(async () => {
+      const r = await resetOrcafascio(licitacaoId);
       if (r?.error) setActionError(r.error);
     });
   }
@@ -277,10 +295,15 @@ export function ExtractionPanel({
       {canCadastrar && (
         <div className="space-y-3 rounded-md border border-blue-200 bg-blue-50 p-4">
           <div>
-            <p className="text-sm font-medium text-blue-900">Pronto pra cadastrar no Orçafascio</p>
+            <p className="text-sm font-medium text-blue-900">
+              Passo 1 — Cadastrar composições próprias no MyBase
+            </p>
             <p className="mt-1 text-xs text-blue-800">
-              O bot vai criar uma pasta no seu MyBase e cadastrar todas as composições próprias do edital com seus itens.
-              Depois você só precisa criar o orçamento no painel do Orçafascio importando a pasta.
+              Cria uma pasta no MyBase e cadastra as composições <strong>PROPRIAS</strong>{' '}
+              do edital (com seus sub-itens, coeficientes e nomenclatura{' '}
+              <strong>exatamente como o orçamento do órgão</strong>). É pré-requisito do
+              Passo 2 — sem isso, as composições PROPRIAS ficam com valor R$ 0,00 no
+              orçamento final.
             </p>
           </div>
           <button
@@ -288,7 +311,7 @@ export function ExtractionPanel({
             disabled={isPending}
             className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           >
-            {isPending ? 'Cadastrando…' : 'Cadastrar no Orçafascio'}
+            {isPending ? 'Cadastrando…' : 'Cadastrar composições próprias'}
           </button>
         </div>
       )}
@@ -335,30 +358,37 @@ export function ExtractionPanel({
           <div className="space-y-3 rounded-md border border-purple-200 bg-purple-50 p-4">
             <div>
               <p className="text-sm font-medium text-purple-900">
-                🚀 Cadastrar orçamento completo no Orçafascio (automação 100%)
+                🚀 Passo 2 — Cadastrar orçamento completo no Orçafascio
               </p>
               <p className="mt-1 text-xs text-purple-800">
-                Cria o orçamento no Orçafascio com cabeçalho, BDI, leis sociais e adiciona
-                todas as etapas + composições em batch único. Usa a API interna /v2023/
-                (cookie de sessão, email+senha). Você só precisa abrir o link no fim
-                pra revisar.
+                Cria o orçamento com cabeçalho, BDI, leis sociais, 3 bancos
+                (SINAPI/SICRO3/ORSE) e adiciona todas as etapas + composições em batch
+                único. Composições PROPRIAS referenciam o MyBase do Passo 1.
               </p>
               {status === 'aguardando_revisao_humana' && (
                 <p className="mt-2 rounded bg-amber-100 px-2 py-1 text-[11px] text-amber-900">
-                  ⚠ Sem passar pelo MyBase: composições próprias (PROPRIA) vão pro
-                  orçamento sem o ID da pasta. Se o Orçafascio rejeitar, você pode
-                  cadastrá-las manualmente no MyBase antes ou pegar um secret_token
-                  de API.
+                  ⚠ Você ainda não rodou o Passo 1 (MyBase). As composições PROPRIAS
+                  vão pro orçamento com valor R$ 0,00.
                 </p>
               )}
             </div>
-            <button
-              onClick={handleCadastrarOrcamentoCompleto}
-              disabled={isPending}
-              className="rounded-md bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50"
-            >
-              {isPending ? 'Cadastrando…' : '🚀 Cadastrar orçamento completo'}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={handleCadastrarOrcamentoCompleto}
+                disabled={isPending}
+                className="rounded-md bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50"
+              >
+                {isPending ? 'Cadastrando…' : '🚀 Cadastrar orçamento completo'}
+              </button>
+              <button
+                onClick={handleResetOrcafascio}
+                disabled={isPending}
+                className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+                title="Limpa IDs MyBase + sessão web + volta status pra criando_composicoes_edital (Passo 1)"
+              >
+                ↺ Resetar Orçafascio
+              </button>
+            </div>
           </div>
         )}
 
@@ -413,12 +443,22 @@ export function ExtractionPanel({
       {isDone && ultimaExtracao?.json && (
         <div className="space-y-2 text-sm">
           <p className="text-emerald-700">Extração aprovada e composições cadastradas no Orçafascio.</p>
-          <details className="text-xs">
-            <summary className="cursor-pointer text-zinc-600">Ver itens extraídos ({ultimaExtracao.json.itens.length})</summary>
-            <pre className="mt-2 max-h-96 overflow-auto rounded bg-zinc-50 p-3 text-[11px]">
-              {JSON.stringify(ultimaExtracao.json, null, 2)}
-            </pre>
-          </details>
+          <div className="flex items-center gap-2">
+            <details className="flex-1 text-xs">
+              <summary className="cursor-pointer text-zinc-600">Ver itens extraídos ({ultimaExtracao.json.itens.length})</summary>
+              <pre className="mt-2 max-h-96 overflow-auto rounded bg-zinc-50 p-3 text-[11px]">
+                {JSON.stringify(ultimaExtracao.json, null, 2)}
+              </pre>
+            </details>
+            <button
+              onClick={handleResetOrcafascio}
+              disabled={isPending}
+              className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+              title="Refaz Passo 1 + 2 do zero"
+            >
+              {isPending ? 'Resetando…' : '↺ Resetar Orçafascio'}
+            </button>
+          </div>
         </div>
       )}
 

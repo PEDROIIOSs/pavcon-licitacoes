@@ -578,6 +578,63 @@ export async function cadastrarOrcamentoCompleto(
   };
 }
 
+// Limpa o estado do Orçafascio pra esta licitação e volta o status pra
+// criando_composicoes_edital (onde o botão MyBase fica visível novamente).
+// Útil quando alguma chamada Orçafascio falhou no meio e o usuário quer
+// retentar do zero sem ter que pedir reset via SQL.
+//
+// IMPORTANTE: NÃO toca em composicoes_extraidas / extracoes_ocr (dados da
+// extração). NÃO deleta nada do MyBase ou do orçamento no Orçafascio web —
+// isso o usuário precisa fazer manualmente (ou via API key, futura feature).
+export async function resetOrcafascio(licitacaoId: string): Promise<ActionResult> {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { error: 'Não autenticado.' };
+
+  const admin = createAdminClient();
+
+  // 1) Limpa orcafascio_composition_id das composições próprias (pra que
+  //    botão MyBase consiga recriar do zero, sem skip de idempotência)
+  await admin
+    .from('composicoes_extraidas')
+    .update({ orcafascio_composition_id: null })
+    .eq('licitacao_id', licitacaoId);
+
+  // 2) Invalida sessão web cacheada (força login fresco no próximo retry)
+  const { data: creds } = await admin
+    .from('api_credentials')
+    .select('id, metadata')
+    .eq('provider', 'orcafascio')
+    .eq('ativo', true);
+  const credWebId = (creds ?? []).find(
+    (c) => (c.metadata as { auth_type?: string } | null)?.auth_type === 'web',
+  )?.id;
+  if (credWebId) {
+    await admin
+      .from('orcafascio_sessoes')
+      .delete()
+      .eq('credential_id', credWebId);
+  }
+
+  // 3) Volta status pra criando_composicoes_edital (botão 1 fica visível).
+  //    State machine só permite voltar via 'erro' intermediário.
+  await admin
+    .from('licitacoes')
+    .update({ status: 'erro' })
+    .eq('id', licitacaoId);
+  const { error: e2 } = await admin
+    .from('licitacoes')
+    .update({
+      status: 'criando_composicoes_edital',
+      fase1_concluida_em: null,
+    })
+    .eq('id', licitacaoId);
+  if (e2) return { error: `Falha ao resetar status: ${e2.message}` };
+
+  revalidatePath(`/licitacoes/${licitacaoId}`);
+  return { ok: true };
+}
+
 export async function resetToDraft(licitacaoId: string): Promise<ActionResult> {
   // Útil quando a extração falha: zerar pra rascunho e tentar de novo.
   const supabase = await createClient();
