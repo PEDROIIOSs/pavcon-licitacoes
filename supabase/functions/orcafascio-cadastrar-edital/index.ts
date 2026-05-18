@@ -524,6 +524,9 @@ Deno.serve(async (req: Request) => {
       // pra o orçamentista adicionar manualmente na UI web.
       const itemsParaApi: CompositionItem[] = [];
       const subItensManuais: string[] = [];
+      // Cruzamento payload → sub_item original (pro fallback poder logar
+      // descrição/preço quando o code falha)
+      const itemPayloadToSub = new Map<string, ComposicaoPropriaItem>();
       for (const s of subs) {
         if (!s.codigo || s.coeficiente == null || s.coeficiente <= 0) continue;
         const isAuxPropria = s.fonte === 'PROPRIA' && s.classe === 'COMPOSICAO';
@@ -535,8 +538,10 @@ Deno.serve(async (req: Request) => {
           );
           continue;
         }
+        const bankNorm = fonteToBank(s.fonte);
+        itemPayloadToSub.set(`${bankNorm}/${s.codigo}`, s);
         itemsParaApi.push({
-          bank: fonteToBank(s.fonte),
+          bank: bankNorm,
           code: s.codigo,
           qty: s.coeficiente,
           // classe='COMPOSICAO' → type:'composition'; outros (INSUMO, MAT,
@@ -567,20 +572,39 @@ Deno.serve(async (req: Request) => {
           const msg = err instanceof Error ? err.message : String(err);
           console.log(`[cadastrar-edital] batch ${codigo} falhou (${msg}), tentando item a item`);
           let oneByOneOk = 0;
-          const failures: string[] = [];
+          const failuresManual: string[] = [];
           for (const it of items) {
             try {
               await addItemsToComposition(ctx, created.id, [it]);
               oneByOneOk++;
             } catch (e2) {
-              const m2 = e2 instanceof Error ? e2.message : String(e2);
-              failures.push(`${it.bank}/${it.code} (qty ${it.qty}, type ${it.type}) → ${m2.slice(0, 100)}`);
+              // 422 "already_in_use" = sucesso. O batch que falhou com 500
+              // espúrio na verdade adicionou os items — quando tentamos
+              // de novo, a API diz "já está em uso". Conta como OK.
+              const details = (e2 instanceof OrcafascioApiError && e2.details) || null;
+              const detailsStr = details ? JSON.stringify(details) : '';
+              if (detailsStr.includes('already_in_use')) {
+                oneByOneOk++;
+                continue;
+              }
+              // 500 persistente. Provavelmente o code não existe no banco
+              // do Orçafascio (descontinuado ou de outra versão). Gera
+              // warning detalhado com info do edital pra adição manual.
+              const sub = itemPayloadToSub.get(`${it.bank}/${it.code}`);
+              const desc = (sub?.descricao ?? '').slice(0, 80);
+              const preco = sub?.preco_unitario != null
+                ? `R$ ${Number(sub.preco_unitario).toFixed(2)}`
+                : 's/preço';
+              const unid = sub?.unidade ?? '';
+              failuresManual.push(
+                `${it.bank}/${it.code} ${desc} (${unid}, ${preco}, coef ${it.qty})`,
+              );
             }
           }
           itensAdicionados += oneByOneOk;
-          if (failures.length > 0) {
+          if (failuresManual.length > 0) {
             warnings.push(
-              `Composição "${codigo}": ${oneByOneOk}/${items.length} itens OK, falhas: ${failures.join('; ')}`,
+              `Composição "${codigo}": ${oneByOneOk}/${items.length} itens OK. Items não encontrados no banco do Orçafascio (provável código descontinuado) — adicionar manual: ${failuresManual.join('; ')}`,
             );
           }
         }
