@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server';
 import { formatBRL, formatDate, statusColor, statusLabel } from '@/lib/utils';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { DiagnosticoCadastro } from './diagnostico-cadastro';
 import { ExtractionPanel } from './extraction-panel';
 import { PollRefresher } from './poll-refresher';
 import { ProposalCard } from './proposal-card';
@@ -57,6 +58,14 @@ export default async function LicitacaoDetailPage({
     .select('preco_total, preco_unitario_sem_bdi, quantidade')
     .eq('licitacao_id', id)
     .eq('tipo_linha', 'servico');
+
+  // Lista completa dos serviços pra o painel de diagnóstico de cadastramento
+  const { data: servicosDetalhados } = await supabase
+    .from('composicoes_extraidas')
+    .select('item_codigo, descricao, fonte, codigo, unidade, quantidade, preco_unitario_com_bdi, preco_total, orcafascio_composition_id, ordem')
+    .eq('licitacao_id', id)
+    .eq('tipo_linha', 'servico')
+    .order('ordem', { ascending: true });
 
   let totalComBdi = 0;
   let totalSemBdi = 0;
@@ -238,6 +247,25 @@ export default async function LicitacaoDetailPage({
                 ja_revisada: !!ultimaExtracao.json_corrigido,
               }
             : null}
+        />
+
+        {/* Painel de diagnóstico do cadastramento — só aparece quando já cadastrou
+            (cadastro_resumo tem budget_url). Compara totais e mostra warnings
+            específicos pro orçamentista revisar diretamente no Orçafascio. */}
+        <DiagnosticoCadastro
+          servicos={(servicosDetalhados ?? []).map((s) => ({
+            item_codigo: s.item_codigo,
+            descricao: s.descricao,
+            fonte: s.fonte,
+            codigo: s.codigo,
+            unidade: s.unidade,
+            quantidade: s.quantidade != null ? Number(s.quantidade) : null,
+            preco_unitario_com_bdi: s.preco_unitario_com_bdi != null ? Number(s.preco_unitario_com_bdi) : null,
+            preco_total: s.preco_total != null ? Number(s.preco_total) : null,
+            orcafascio_composition_id: s.orcafascio_composition_id,
+          }))}
+          totalExtraido={totalComBdi}
+          resumo={(licitacao.cadastro_resumo ?? null) as Parameters<typeof DiagnosticoCadastro>[0]['resumo']}
         />
 
         {licitacao.status === 'erro' && ultimaExtracao?.erro_detalhe && (

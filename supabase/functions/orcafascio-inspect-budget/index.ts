@@ -146,16 +146,19 @@ Deno.serve(async (req: Request) => {
           keywordHits: hits,
           ...(body.return_full_html
             ? (() => {
-              // Pega o trecho do <body> em diante (descarta CSS/templates do head)
-              const bodyIdx = text.indexOf('<body');
-              const start = bodyIdx >= 0 ? bodyIdx : 0;
-              // Tenta achar a área principal de conteúdo
-              const mainCandidates = ['main role', '<main', 'sh-pagebody', 'content-wrapper', 'sh-content'];
-              for (const k of mainCandidates) {
-                const idx = text.indexOf(k, start);
-                if (idx >= 0) return { html: text.slice(idx, Math.min(idx + 150000, text.length)) };
+              // Pula seção de modals/dropdowns (categorias) e procura tabela de items
+              const tableMarkers = ['orcamento_items', 'budget-items', 'sh-tableresponsive', 'tr_item_', 'data-itemization'];
+              let bestIdx = -1;
+              for (const k of tableMarkers) {
+                const idx = text.indexOf(k);
+                if (idx >= 0 && (bestIdx === -1 || idx < bestIdx)) bestIdx = idx;
               }
-              return { html: text.slice(start, Math.min(start + 150000, text.length)) };
+              // Se achou marcador da tabela, retorna 200k a partir dali
+              if (bestIdx >= 0) {
+                return { html: text.slice(Math.max(0, bestIdx - 1000), Math.min(bestIdx + 200000, text.length)) };
+              }
+              // Fallback: pega último 200k da página (geralmente items estão no fim)
+              return { html: text.slice(Math.max(0, text.length - 200000)) };
             })()
             : {}),
         });

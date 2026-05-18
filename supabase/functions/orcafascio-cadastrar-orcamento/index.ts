@@ -419,6 +419,20 @@ Deno.serve(async (req: Request) => {
     // ---- 9) Persiste budget_id na licitação + transição --------------------
     // PROPOSTA: não toca no status (orçamento base mantém fase1_concluida)
     if (!isProposta) {
+      // Resumo do cadastramento — UI da licitação lê esse JSON pra mostrar
+      // painel de diagnóstico (items OK, warnings, totais, próximos passos).
+      const cadastroResumo = {
+        cadastrado_em: new Date().toISOString(),
+        budget_id,
+        budget_url: `https://app.orcafascio.com/orc/orcamentos/${budget_id}`,
+        etapas_criadas: etapasCriadas,
+        composicoes_criadas: composicoesCriadas,
+        total_itens_batch: items.length,
+        bdi: bdiPct,
+        leis_sociais_horista: leisHorista,
+        bancos_configurados: bancos.map((b) => `${b.nome} ${b.estado ?? ''} ${b.data}`.trim()),
+        warnings,
+      };
       await admin
         .from('licitacoes')
         .update({
@@ -426,6 +440,7 @@ Deno.serve(async (req: Request) => {
           fase1_concluida_em: new Date().toISOString(),
           orcafascio_orcamento_base_id: budget_id,
           orcafascio_orcamento_base_codigo: codigo,
+          cadastro_resumo: cadastroResumo,
         })
         .eq('id', licitacaoId);
     }
