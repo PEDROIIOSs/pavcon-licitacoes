@@ -81,12 +81,21 @@ export default async function DashboardPage({
           </div>
           <div className="flex items-center gap-2">
             {userIsAdmin && (
-              <Link
-                href="/dashboard/usuarios"
-                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
-              >
-                Usuários
-              </Link>
+              <>
+                <Link
+                  href="/dashboard/code-mappings"
+                  className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
+                  title="Mapeamento de códigos descontinuados do Orçafascio"
+                >
+                  Códigos
+                </Link>
+                <Link
+                  href="/dashboard/usuarios"
+                  className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
+                >
+                  Usuários
+                </Link>
+              </>
             )}
             <form action={signOut}>
               <button

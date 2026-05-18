@@ -398,6 +398,9 @@ export async function findCompositionByCode(
   ctx: OpContext,
   code: string,
 ): Promise<CompositionRecord | null> {
+  // 1) Primeira tentativa: find_by_code (rápido). Mas o Orçafascio devolve 500
+  //    silencioso pra alguns codes (causa desconhecida — observado com codes
+  //    contendo múltiplos pontos/underscores ou caracteres especiais).
   const result = await orcafascioFetch(
     ctx.admin,
     ctx.credentialId,
@@ -411,14 +414,33 @@ export async function findCompositionByCode(
     },
   );
   if (result.status === 404) return null;
-  if (result.status < 200 || result.status >= 300) {
-    throw new OrcafascioApiError(
-      result.status,
-      `findCompositionByCode falhou: ${result.status}.`,
-      result.json,
-    );
+  if (result.status >= 200 && result.status < 300) {
+    return result.json as CompositionRecord;
   }
-  return result.json as CompositionRecord;
+  // 2) Fallback: paginar via listCompositions (mais lento mas confiável).
+  //    Usado quando find_by_code retorna 500 por bug do servidor.
+  if (result.status === 500) {
+    console.log(
+      `[findCompositionByCode] find_by_code 500 pra "${code}", paginando listCompositions`,
+    );
+    for (let page = 1; page <= 50; page++) {
+      try {
+        const r = await listCompositions(ctx, page);
+        const match = (r.records ?? []).find((c) => c.code === code);
+        if (match) return match;
+        if (!r.records || r.records.length === 0) return null;
+        if (r.total != null && page * 10 >= r.total) return null;
+      } catch {
+        return null; // se listCompositions também falha, assume que não existe
+      }
+    }
+    return null;
+  }
+  throw new OrcafascioApiError(
+    result.status,
+    `findCompositionByCode falhou: ${result.status}.`,
+    result.json,
+  );
 }
 
 export async function getComposition(

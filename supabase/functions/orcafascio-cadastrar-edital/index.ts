@@ -276,6 +276,23 @@ Deno.serve(async (req: Request) => {
       `[cadastrar-edital] bases da composição: ${basesEdital.join('+')} ${ufEdital} ${dataBaseEdital}`,
     );
 
+    // Carrega mapeamento de codes descontinuados (substitui automaticamente).
+    // Map<"FONTE_ORIGINAL/CODIGO_ORIGINAL", {fonte_substituto, codigo_substituto}>
+    const { data: mappings } = await admin
+      .from('orcafascio_code_mappings')
+      .select('fonte_original, codigo_original, fonte_substituto, codigo_substituto')
+      .not('fonte_substituto', 'is', null)
+      .not('codigo_substituto', 'is', null);
+    const codeMappings = new Map<string, { fonte: string; codigo: string }>();
+    for (const m of mappings ?? []) {
+      const key = `${(m.fonte_original ?? '').toUpperCase()}/${m.codigo_original}`;
+      codeMappings.set(key, {
+        fonte: (m.fonte_substituto as string).toUpperCase(),
+        codigo: m.codigo_substituto as string,
+      });
+    }
+    console.log(`[cadastrar-edital] ${codeMappings.size} code mappings carregados`);
+
     const composicaoIds = composicoes.map((c) => c.id);
     // ordem ASC pra preservar a sequência do edital — sem ordem explícita,
     // a UI do Orçafascio acaba alfabetizando os sub-itens.
@@ -538,11 +555,20 @@ Deno.serve(async (req: Request) => {
           );
           continue;
         }
-        const bankNorm = fonteToBank(s.fonte);
-        itemPayloadToSub.set(`${bankNorm}/${s.codigo}`, s);
+        // Aplica mapeamento de code descontinuado (auto-substituição).
+        // Ex: SICRO/E9515 (descontinuado) → SICRO3/123456 (novo).
+        // O user popula orcafascio_code_mappings conforme descobre.
+        const fonteRaw = (s.fonte ?? '').toUpperCase();
+        const mappingKey = `${fonteRaw}/${s.codigo}`;
+        const mapping = codeMappings.get(mappingKey);
+        const fonteFinal = mapping ? mapping.fonte : (s.fonte ?? null);
+        const codigoFinal = mapping ? mapping.codigo : s.codigo;
+
+        const bankNorm = fonteToBank(fonteFinal);
+        itemPayloadToSub.set(`${bankNorm}/${codigoFinal}`, s);
         itemsParaApi.push({
           bank: bankNorm,
-          code: s.codigo,
+          code: codigoFinal,
           qty: s.coeficiente,
           // classe='COMPOSICAO' → type:'composition'; outros (INSUMO, MAT,
           // EQUIPAMENTO) → type:'resource'.
@@ -599,6 +625,18 @@ Deno.serve(async (req: Request) => {
               failuresManual.push(
                 `${it.bank}/${it.code} ${desc} (${unid}, ${preco}, coef ${it.qty})`,
               );
+              // Registra na tabela de mapeamentos pra o user mapear depois
+              // (idempotente — ON CONFLICT DO NOTHING).
+              if (sub) {
+                await admin
+                  .from('orcafascio_code_mappings')
+                  .upsert({
+                    fonte_original: it.bank,
+                    codigo_original: it.code,
+                    descricao: sub.descricao ?? null,
+                    motivo: 'addItemsToComposition retornou 500 — code provável descontinuado',
+                  }, { onConflict: 'fonte_original,codigo_original', ignoreDuplicates: true });
+              }
             }
           }
           itensAdicionados += oneByOneOk;

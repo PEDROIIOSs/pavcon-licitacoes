@@ -255,6 +255,69 @@ Deno.serve(async (req) => {
       path: `/base/mybase/compositions/${compositionId}`,
       body: { SINAPI: { data: '02/2026', estado: 'PI' } },
     },
+    // ===== Variações pra setar PRICES manuais da composição =====
+    {
+      label: 'PR1) PATCH /base/mybase/compositions/{id} {prices:{pnd,pd}}',
+      method: 'PATCH',
+      path: `/base/mybase/compositions/${compositionId}`,
+      body: { prices: { pnd: 100, pd: 100, pndi: 100, pdi: 100 } },
+    },
+    {
+      label: 'PR2) PUT /base/mybase/compositions/{id} {prices:{pnd,pd}}',
+      method: 'PUT',
+      path: `/base/mybase/compositions/${compositionId}`,
+      body: { prices: { pnd: 100, pd: 100, pndi: 100, pdi: 100 } },
+    },
+    {
+      label: 'PR3) POST /update-prices {prices:{...}}',
+      method: 'POST',
+      path: `/base/mybase/compositions/${compositionId}/update-prices`,
+      body: { prices: { pnd: 100, pd: 100 } },
+    },
+    {
+      label: 'PR4) POST /set-manual-price {value}',
+      method: 'POST',
+      path: `/base/mybase/compositions/${compositionId}/set-manual-price`,
+      body: { value: 100 },
+    },
+    {
+      label: 'PR5) PATCH composition flat pnd:100',
+      method: 'PATCH',
+      path: `/base/mybase/compositions/${compositionId}`,
+      body: { pnd: 100, pd: 100, pndi: 100, pdi: 100, manual_price: true },
+    },
+    {
+      label: 'PR6) PATCH composition payload completo + prices',
+      method: 'PATCH',
+      path: `/base/mybase/compositions/${compositionId}`,
+      body: {
+        code: 'TEST_PRICE_OVERRIDE',
+        description: 'Test composition override',
+        labor: false,
+        type: 'PARE',
+        unit: 'un',
+        local: 'PI',
+        is_sicro: false,
+        rounding_type: 2,
+        prices: { pnd: 100, pd: 100 },
+      },
+    },
+    {
+      label: 'PR7) PUT composition payload completo + prices',
+      method: 'PUT',
+      path: `/base/mybase/compositions/${compositionId}`,
+      body: {
+        code: 'TEST_PRICE_OVERRIDE_PUT',
+        description: 'Test composition override PUT',
+        labor: false,
+        type: 'PARE',
+        unit: 'un',
+        local: 'PI',
+        is_sicro: false,
+        rounding_type: 2,
+        prices: { pnd: 100, pd: 100 },
+      },
+    },
   ];
 
   const results: Array<{ label: string; status: number; bodySnippet: string }> = [];
