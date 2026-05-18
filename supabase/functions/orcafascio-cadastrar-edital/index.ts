@@ -502,10 +502,12 @@ Deno.serve(async (req: Request) => {
       // Configura bases (SINAPI/SICRO/ORSE/etc) com UF + data-base do edital.
       // Composições criadas usam default da conta (SINAPI/AC/01-2026), e os
       // códigos do edital (que vivem em PI/02-2026 ou similar) retornam 500
-      // no addItemsToComposition sem isso. Chamamos SEMPRE (mesmo em retry)
-      // pra garantir que composições reusadas de tentativas antigas também
-      // tenham as bases corretas. Best-effort: warning não fatal.
-      if (basesDaComposicao.length > 0) {
+      // no addItemsToComposition sem isso. SÓ chamamos pra composições
+      // vazias — Orçafascio retorna 500 silencioso se add-bases for chamado
+      // numa composição que já tem items (faz sentido: bases definem onde
+      // o servidor procura os codes, não dá pra mudar depois de resolvido).
+      const itensJaExistentes = ((created as { items?: unknown[] }).items ?? []).length;
+      if (basesDaComposicao.length > 0 && itensJaExistentes === 0) {
         try {
           await addBasesToComposition(ctx, created.id, basesDaComposicao);
         } catch (e) {
