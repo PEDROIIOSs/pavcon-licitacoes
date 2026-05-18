@@ -553,13 +553,14 @@ export function pickUF(licitacaoUF?: string | null, fallback = 'SP'): string {
   return (licitacaoUF && licitacaoUF.length === 2) ? licitacaoUF.toUpperCase() : fallback;
 }
 
-/** Mapeia fonte do edital pro `bank` esperado pela API. */
+/** Mapeia fonte do edital pro `bank` esperado pela API.
+ * Normalização importante: SICRO sem versão → SICRO3 (versão atual aceita
+ * pelo Orçafascio; SICRO antigo retorna "Base not found"). */
 export function fonteToBank(fonte: string | null | undefined): string {
   if (!fonte) return 'OUTROS';
-  const f = fonte.toUpperCase();
-  // Conforme docs: SINAPI, SBC, SICRO, ORSE são bancos válidos
-  if (['SINAPI', 'SBC', 'SICRO', 'ORSE', 'SEINFRA', 'FDE'].includes(f)) return f;
-  // PROPRIA → bank "MYBASE" (insumos cadastrados na própria base do user)
+  const f = fonte.toUpperCase().trim();
+  if (f === 'SICRO' || f === 'SICRO3') return 'SICRO3';
+  if (['SINAPI', 'SBC', 'ORSE', 'SEINFRA', 'FDE', 'SETOP', 'EMBASA', 'CPOS', 'EMOP', 'SCO', 'SUDECAP', 'IOPES', 'AGESUL'].includes(f)) return f;
   if (f === 'PROPRIA') return 'MYBASE';
   return 'OUTROS';
 }

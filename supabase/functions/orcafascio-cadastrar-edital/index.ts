@@ -232,14 +232,46 @@ Deno.serve(async (req: Request) => {
     const basesEdital = Array.isArray(cabecalho.bases_utilizadas)
       ? cabecalho.bases_utilizadas.map((b) => String(b).toUpperCase().trim()).filter((b) => b !== 'PROPRIA')
       : ['SINAPI'];
-    const basesDaComposicao = basesEdital.map((nome) => ({
-      name: nome,
-      local: ufEdital,
-      version: dataBaseEdital,
-      status: true,
-      // Não-desonerado é o default em obras públicas com encargos embutidos
-      with_labor_charges: !cabecalho.com_desoneracao,
-    }));
+
+    // Normaliza nome do banco + UF padrão pros bancos que só existem em
+    // um estado. Sem isso, addBases retorna 422 "Local not found"
+    // (ORSE só em SE) ou "Base not found" (SICRO → precisa SICRO3).
+    interface BankConfig { name: string; local: string }
+    const BANK_NORMALIZATION: Record<string, BankConfig | { skipUf: false; renameOnly: string }> = {
+      SICRO: { name: 'SICRO3', local: '' },     // local segue ufEdital
+      SICRO3: { name: 'SICRO3', local: '' },
+      SINAPI: { name: 'SINAPI', local: '' },
+      SBC: { name: 'SBC', local: 'BA' },         // SBC fixo em BA
+      ORSE: { name: 'ORSE', local: 'SE' },       // ORSE fixo em SE
+      SEINFRA: { name: 'SEINFRA', local: 'CE' }, // SEINFRA fixo em CE
+      SETOP: { name: 'SETOP', local: 'MG' },
+      EMBASA: { name: 'EMBASA', local: 'BA' },
+      FDE: { name: 'FDE', local: 'SP' },
+      CPOS: { name: 'CPOS', local: 'SP' },
+      SUDECAP: { name: 'SUDECAP', local: 'MG' },
+      IOPES: { name: 'IOPES', local: 'ES' },
+      AGESUL: { name: 'AGESUL', local: 'MS' },
+      EMOP: { name: 'EMOP', local: 'RJ' },
+      SCO: { name: 'SCO', local: 'RJ' },
+    };
+    const basesDaComposicao: Array<{
+      name: string; local: string; version: string; status: boolean; with_labor_charges?: boolean;
+    }> = [];
+    for (const nome of basesEdital) {
+      const cfg = BANK_NORMALIZATION[nome] as BankConfig | undefined;
+      if (!cfg) {
+        warnings.push(`Banco "${nome}" não mapeado em BANK_NORMALIZATION — pulando.`);
+        continue;
+      }
+      basesDaComposicao.push({
+        name: cfg.name,
+        // Usa local fixo do banco (ORSE→SE, SBC→BA) se houver; senão usa UF do edital
+        local: cfg.local || ufEdital,
+        version: dataBaseEdital,
+        status: true,
+        with_labor_charges: !cabecalho.com_desoneracao,
+      });
+    }
     console.log(
       `[cadastrar-edital] bases da composição: ${basesEdital.join('+')} ${ufEdital} ${dataBaseEdital}`,
     );
@@ -457,11 +489,16 @@ Deno.serve(async (req: Request) => {
         try {
           await addBasesToComposition(ctx, created.id, basesDaComposicao);
         } catch (e) {
-          const m = e instanceof Error ? e.message : String(e);
-          // 422 "já em uso" é OK — bases já configuradas anteriormente
-          if (!m.toLowerCase().includes('422') && !m.toLowerCase().includes('use')) {
+          // 422 "already in use" (idempotência) é OK; outros 422 (Local
+          // not found, Base not found) precisam de aviso pq itens vão
+          // falhar com 500.
+          const details = (e instanceof OrcafascioApiError && e.details) || null;
+          const detailsStr = details ? JSON.stringify(details).slice(0, 200) : '';
+          const isAlreadyInUse = detailsStr.toLowerCase().includes('already_in_use') ||
+            detailsStr.toLowerCase().includes('já está utilizada');
+          if (!isAlreadyInUse) {
             warnings.push(
-              `Composição "${codigo}": addBases falhou (${m.slice(0, 120)}). Items dos bancos podem falhar com 500.`,
+              `Composição "${codigo}": addBases falhou ${detailsStr || (e instanceof Error ? e.message.slice(0, 120) : '')}. Items dessas bases podem falhar com 500.`,
             );
           }
         }
