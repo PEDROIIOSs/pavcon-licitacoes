@@ -386,9 +386,10 @@ Deno.serve(async (req: Request) => {
         // não resolve o public_banco_id → valor R$ 0,00 no orçamento.
         const isPropria = c.fonte === 'PROPRIA';
         // PRECISA usar o MESMO formato de cadastrar-edital.ts pra Orçafascio
-        // achar a composição no MyBase via public_banco_id + code.
+        // achar a composição no MyBase via public_banco_id + code. Sem pontos —
+        // find_by_code dá 500 silencioso pra codes com múltiplos pontos.
         const mybaseCode = `COMPOSIC_${(c.item_codigo as string)
-          .replace(/[^A-Za-z0-9._-]/g, '_')
+          .replace(/[^A-Za-z0-9_-]/g, '_')
           .slice(0, 40)}`;
         const code = isPropria ? mybaseCode : (c.codigo ?? '');
         if (!code) continue;

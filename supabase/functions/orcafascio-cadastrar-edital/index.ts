@@ -429,8 +429,11 @@ Deno.serve(async (req: Request) => {
       // - sufixo item_codigo garante unicidade dentro da licitação
       // OBS: companies com várias licitações podem ter colisão (mesmo item_codigo
       // "1.1" em editais diferentes) — mas o find-or-create reusa, sem 422.
+      // IMPORTANTE: removemos PONTOS do code também — find_by_code do
+      // Orçafascio retorna 500 silencioso pra codes com múltiplos pontos
+      // (ex: "COMPOSIC_1.1.1"). Trocando ponto por underscore resolve.
       const sanitized = comp.item_codigo
-        .replace(/[^A-Za-z0-9._-]/g, '_')
+        .replace(/[^A-Za-z0-9_-]/g, '_')
         .slice(0, 40);
       const codigo = `COMPOSIC_${sanitized}`.slice(0, 50);
       const descricao = (comp.descricao ?? 'Composição própria do edital').slice(0, 500);
@@ -456,7 +459,7 @@ Deno.serve(async (req: Request) => {
           created = await createComposition(ctx, {
             code: codigo,
             second_code: `LICITACAO_${licitacaoId.slice(0, 8)}_${comp.item_codigo
-              .replace(/[^A-Za-z0-9._-]/g, '_')
+              .replace(/[^A-Za-z0-9_-]/g, '_')
               .slice(0, 30)}`,
             description: descricao,
             labor: false,
