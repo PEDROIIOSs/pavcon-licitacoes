@@ -54,6 +54,7 @@ import {
   OrcafascioAuthError,
 } from '../_shared/orcafascio.ts';
 import {
+  addBasesToComposition,
   addItemsToComposition,
   COMPOSITION_TYPES,
   createComposition,
@@ -171,6 +172,77 @@ Deno.serve(async (req: Request) => {
     if (!composicoes || composicoes.length === 0) {
       return errorResponse(422, 'Nenhuma composição PRÓPRIA encontrada nesta licitação.');
     }
+
+    // Pega cabecalho da extração pra montar bases (data-base + UF). Sem isso,
+    // composições novas usam SINAPI/AC/01-2026 default → códigos do edital
+    // (que vivem em outra UF/data) retornam 500 ao serem adicionados.
+    const { data: extr } = await admin
+      .from('extracoes_ocr')
+      .select('json_corrigido, json_extraido')
+      .eq('licitacao_id', licitacaoId)
+      .in('status', ['sucesso', 'revisada_humano'])
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const cabecalho = ((extr?.json_corrigido ?? extr?.json_extraido) as
+      { cabecalho?: { data_base_descricao?: string; uf?: string; bases_utilizadas?: string[]; com_desoneracao?: boolean } } | null
+    )?.cabecalho ?? {};
+    // Monta versão default MM/AAAA do data_base_descricao
+    // Aceita: "fev/26", "02/2026", "fevereiro/2026", "JANEIRO/2026"
+    function parseDataBase(s: string | undefined): string {
+      if (!s) {
+        const d = new Date();
+        return `${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+      }
+      const meses: Record<string, string> = {
+        jan: '01', janeiro: '01',
+        fev: '02', fevereiro: '02',
+        mar: '03', marco: '03', março: '03',
+        abr: '04', abril: '04',
+        mai: '05', maio: '05',
+        jun: '06', junho: '06',
+        jul: '07', julho: '07',
+        ago: '08', agosto: '08',
+        set: '09', setembro: '09',
+        out: '10', outubro: '10',
+        nov: '11', novembro: '11',
+        dez: '12', dezembro: '12',
+      };
+      const normalized = s.toLowerCase().trim();
+      // Tenta formato "MM/AAAA" direto
+      const direct = normalized.match(/(\d{1,2})\s*\/\s*(\d{4}|\d{2})/);
+      if (direct) {
+        const month = direct[1].padStart(2, '0');
+        const year = direct[2].length === 2 ? `20${direct[2]}` : direct[2];
+        return `${month}/${year}`;
+      }
+      // "fev/26" ou "fevereiro/2026"
+      const named = normalized.match(/([a-zç]+)\s*\/\s*(\d{4}|\d{2})/);
+      if (named && meses[named[1]]) {
+        const month = meses[named[1]];
+        const year = named[2].length === 2 ? `20${named[2]}` : named[2];
+        return `${month}/${year}`;
+      }
+      // Fallback
+      const d = new Date();
+      return `${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+    }
+    const dataBaseEdital = parseDataBase(cabecalho.data_base_descricao);
+    const ufEdital = (cabecalho.uf ?? licitacao.uf ?? 'SP').toString().toUpperCase().slice(0, 2);
+    const basesEdital = Array.isArray(cabecalho.bases_utilizadas)
+      ? cabecalho.bases_utilizadas.map((b) => String(b).toUpperCase().trim()).filter((b) => b !== 'PROPRIA')
+      : ['SINAPI'];
+    const basesDaComposicao = basesEdital.map((nome) => ({
+      name: nome,
+      local: ufEdital,
+      version: dataBaseEdital,
+      status: true,
+      // Não-desonerado é o default em obras públicas com encargos embutidos
+      with_labor_charges: !cabecalho.com_desoneracao,
+    }));
+    console.log(
+      `[cadastrar-edital] bases da composição: ${basesEdital.join('+')} ${ufEdital} ${dataBaseEdital}`,
+    );
 
     const composicaoIds = composicoes.map((c) => c.id);
     // ordem ASC pra preservar a sequência do edital — sem ordem explícita,
@@ -340,6 +412,7 @@ Deno.serve(async (req: Request) => {
       // Find-or-create composição por code (único: licitacao_id + item_codigo).
       // Reusa em retry; só cria se nao achar.
       let created;
+      let foiCriadaAgora = false;
       try {
         const existing = await findCompositionByCode(ctx, codigo);
         if (existing) {
@@ -347,6 +420,7 @@ Deno.serve(async (req: Request) => {
           composicoesPuladas++;
           console.log(`[cadastrar-edital] composição reusada: ${codigo} → ${existing.id}`);
         } else {
+          foiCriadaAgora = true;
           created = await createComposition(ctx, {
             code: codigo,
             second_code: `LICITACAO_${licitacaoId.slice(0, 8)}_${comp.item_codigo
@@ -371,6 +445,26 @@ Deno.serve(async (req: Request) => {
         const msg = err instanceof Error ? err.message : String(err);
         warnings.push(`Composição "${codigo}" — falhou: ${msg}`);
         continue;
+      }
+
+      // Configura bases (SINAPI/SICRO/ORSE/etc) com UF + data-base do edital.
+      // Composições criadas usam default da conta (SINAPI/AC/01-2026), e os
+      // códigos do edital (que vivem em PI/02-2026 ou similar) retornam 500
+      // no addItemsToComposition sem isso. Chamamos SEMPRE (mesmo em retry)
+      // pra garantir que composições reusadas de tentativas antigas também
+      // tenham as bases corretas. Best-effort: warning não fatal.
+      if (basesDaComposicao.length > 0) {
+        try {
+          await addBasesToComposition(ctx, created.id, basesDaComposicao);
+        } catch (e) {
+          const m = e instanceof Error ? e.message : String(e);
+          // 422 "já em uso" é OK — bases já configuradas anteriormente
+          if (!m.toLowerCase().includes('422') && !m.toLowerCase().includes('use')) {
+            warnings.push(
+              `Composição "${codigo}": addBases falhou (${m.slice(0, 120)}). Items dos bancos podem falhar com 500.`,
+            );
+          }
+        }
       }
 
       // Adiciona sub-itens da composição própria.
@@ -440,7 +534,7 @@ Deno.serve(async (req: Request) => {
               oneByOneOk++;
             } catch (e2) {
               const m2 = e2 instanceof Error ? e2.message : String(e2);
-              failures.push(`${it.bank}/${it.code} (qty ${it.qty}, is_resource ${it.is_resource}) → ${m2.slice(0, 100)}`);
+              failures.push(`${it.bank}/${it.code} (qty ${it.qty}, type ${it.type}) → ${m2.slice(0, 100)}`);
             }
           }
           itensAdicionados += oneByOneOk;

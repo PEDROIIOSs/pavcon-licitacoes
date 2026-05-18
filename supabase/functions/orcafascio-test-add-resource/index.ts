@@ -212,6 +212,49 @@ Deno.serve(async (req) => {
       path: `/base/mybase/compositions/${compositionId}/add-items`,
       body: { items: [{ bank: 'MYBASE', code, qty: 1 }] },
     },
+    // ===== Variações pra configurar BANKS (data-base) na composição =====
+    {
+      label: 'B1) POST /update-banks {banks:{SINAPI:{...}}}',
+      method: 'POST',
+      path: `/base/mybase/compositions/${compositionId}/update-banks`,
+      body: { banks: { SINAPI: { data: '02/2026', estado: 'PI', relatorio: true } } },
+    },
+    {
+      label: 'B2) PATCH /base/mybase/compositions/{id} {banks:{...}}',
+      method: 'PATCH',
+      path: `/base/mybase/compositions/${compositionId}`,
+      body: { banks: { SINAPI: { data: '02/2026', estado: 'PI', relatorio: true } } },
+    },
+    {
+      label: 'B3) PUT /base/mybase/compositions/{id} {banks:{...}}',
+      method: 'PUT',
+      path: `/base/mybase/compositions/${compositionId}`,
+      body: { banks: { SINAPI: { data: '02/2026', estado: 'PI', relatorio: true } } },
+    },
+    {
+      label: 'B4) POST /update-bases {bases:[...]} (estilo orçamento)',
+      method: 'POST',
+      path: `/base/mybase/compositions/${compositionId}/update-bases`,
+      body: { bases: [{ name: 'SINAPI', local: 'PI', version: '02/2026', status: true }] },
+    },
+    {
+      label: 'B5) POST /add-bases {bases:[...]} (estilo helper antigo)',
+      method: 'POST',
+      path: `/base/mybase/compositions/${compositionId}/add-bases`,
+      body: { bases: [{ name: 'SINAPI', local: 'PI', version: '02/2026', status: true }] },
+    },
+    {
+      label: 'B6) POST /add_bases (underscore) {bases:[...]}',
+      method: 'POST',
+      path: `/base/mybase/compositions/${compositionId}/add_bases`,
+      body: { bases: [{ name: 'SINAPI', local: 'PI', version: '02/2026', status: true }] },
+    },
+    {
+      label: 'B7) PATCH /base/mybase/compositions/{id} {SINAPI:{data,estado}} flat',
+      method: 'PATCH',
+      path: `/base/mybase/compositions/${compositionId}`,
+      body: { SINAPI: { data: '02/2026', estado: 'PI' } },
+    },
   ];
 
   const results: Array<{ label: string; status: number; bodySnippet: string }> = [];

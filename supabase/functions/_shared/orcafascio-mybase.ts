@@ -511,6 +511,18 @@ export async function removeItemsFromComposition(
   );
 }
 
+/** Configura as bases (SINAPI, SICRO, ORSE, etc) da composição MyBase com
+ * data + UF específicos. Sem isso, composições novas usam um default da
+ * conta (geralmente SINAPI/AC/01-2026), e códigos só existem em outros
+ * estados/datas → addItemsToComposition retorna 500 silencioso pra esses
+ * códigos. Endpoint correto: `/add-bases` (hífen, não underscore).
+ *
+ * Body por banco:
+ *   - name: 'SINAPI' | 'SICRO' | 'ORSE' | etc
+ *   - local: UF (ex: 'PI', 'SP')
+ *   - version: 'MM/AAAA' (ex: '02/2026')
+ *   - status: true
+ *   - with_labor_charges: opcional, default depende do banco */
 export async function addBasesToComposition(
   ctx: OpContext,
   compositionId: string,
@@ -526,7 +538,7 @@ export async function addBasesToComposition(
   return await expectOk<CompositionRecord>(
     ctx,
     'POST',
-    `/base/mybase/compositions/${compositionId}/add_bases`,
+    `/base/mybase/compositions/${compositionId}/add-bases`,
     { bases },
     'addBasesToComposition',
   );
