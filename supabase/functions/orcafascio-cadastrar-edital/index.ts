@@ -383,29 +383,39 @@ Deno.serve(async (req: Request) => {
       // substituímos o codigo original pelo code do resource e marcamos
       // is_resource: true.
       const subs = subItensByCompId.get(comp.id) ?? [];
-      const items: CompositionItem[] = subs
-        .filter((s) => s.codigo && s.coeficiente != null && s.coeficiente > 0)
-        .map((s) => {
-          const isAuxPropria = s.fonte === 'PROPRIA' && s.classe === 'COMPOSICAO';
-          const aux = isAuxPropria ? auxByOriginalCode.get(s.codigo!) : null;
-          if (aux) {
-            // Substitui pela referência ao resource auxiliar
-            return {
-              bank: 'MYBASE',
-              code: aux.resource_code,
-              qty: s.coeficiente!,
-              is_resource: true,
-            };
-          }
-          return {
-            bank: fonteToBank(s.fonte),
-            code: s.codigo!,
-            qty: s.coeficiente!,
-            // classe='COMPOSICAO' → is_resource:false; outros (INSUMO, MAT,
-            // EQUIPAMENTO) → is_resource:true (são "recursos"/insumos)
-            is_resource: s.classe !== 'COMPOSICAO',
-          };
+      // LIMITAÇÃO conhecida da API pública do Orçafascio: insumos do MyBase
+      // (resources cadastrados pela empresa) NÃO podem ser sub-itens de outra
+      // composição MyBase via /add-items (sempre devolve 500). Por isso os
+      // sub-itens PROPRIA+COMPOSICAO auxiliares (AUX_XX) vão pro warning
+      // pra o orçamentista adicionar manualmente na UI web.
+      const itemsParaApi: CompositionItem[] = [];
+      const subItensManuais: string[] = [];
+      for (const s of subs) {
+        if (!s.codigo || s.coeficiente == null || s.coeficiente <= 0) continue;
+        const isAuxPropria = s.fonte === 'PROPRIA' && s.classe === 'COMPOSICAO';
+        if (isAuxPropria) {
+          const aux = auxByOriginalCode.get(s.codigo);
+          subItensManuais.push(
+            `[Adicionar manual] ${s.codigo} ${(s.descricao ?? '').slice(0, 60)}` +
+            (aux ? ` (Resource MyBase: ${aux.resource_code}, ${s.unidade ?? ''}, ${s.preco_unitario != null ? `R$ ${Number(s.preco_unitario).toFixed(2)}` : 'sem preço'}) — coef ${s.coeficiente}` : ''),
+          );
+          continue;
+        }
+        itemsParaApi.push({
+          bank: fonteToBank(s.fonte),
+          code: s.codigo,
+          qty: s.coeficiente,
+          // classe='COMPOSICAO' → type:'composition'; outros (INSUMO, MAT,
+          // EQUIPAMENTO) → type:'resource'.
+          type: s.classe === 'COMPOSICAO' ? 'composition' : 'resource',
         });
+      }
+      const items = itemsParaApi;
+      if (subItensManuais.length > 0) {
+        warnings.push(
+          `Composição "${codigo}": ${subItensManuais.length} sub-item(ns) PROPRIA auxiliar — Orçafascio API não aceita resource MyBase como sub-item, adicione manualmente na UI: ${subItensManuais.join('; ')}`,
+        );
+      }
 
       // Se reusou uma composição que já tem itens, NÃO adiciona de novo
       // (evita duplicar). Só adiciona se está vazia (recover de attempt

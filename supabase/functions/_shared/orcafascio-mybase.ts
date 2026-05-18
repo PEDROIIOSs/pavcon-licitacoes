@@ -145,8 +145,13 @@ export interface CompositionItem {
   bank: string;              // "SINAPI" | "SBC" | "SICRO" | "ORSE" | ...
   code: string;              // Código do insumo (recurso) OU da composição no banco
   qty: number;               // Coeficiente
-  is_resource: boolean;      // true = insumo (resource), false = composição
-                             // Sem isso, Orçafascio retorna 500 quando o item é INSUMO.
+  /** "resource" = insumo, "composition" = sub-composição.
+   *
+   * IMPORTANTE — testes empíricos mostraram que o Orçafascio aceita
+   * `type: "resource"` e devolve 500 silencioso pra `is_resource: true`.
+   * Composições funcionam SEM o campo type também (caem em "composition"
+   * por default), mas mandar explícito é mais robusto. */
+  type: 'resource' | 'composition';
 }
 
 export interface AddItemsInput {
