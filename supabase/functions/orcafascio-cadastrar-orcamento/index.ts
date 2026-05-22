@@ -388,9 +388,19 @@ Deno.serve(async (req: Request) => {
         // PRECISA usar o MESMO formato de cadastrar-edital.ts pra Orçafascio
         // achar a composição no MyBase via public_banco_id + code. Sem pontos —
         // find_by_code dá 500 silencioso pra codes com múltiplos pontos.
-        const mybaseCode = `COMPOSIC_${(c.item_codigo as string)
-          .replace(/[^A-Za-z0-9_-]/g, '_')
-          .slice(0, 40)}`;
+        // Estratégia: usa código próprio do edital quando preenchido (mais
+        // legível pro orçamentista), senão fallback pra COMPOSIC_<item>.
+        const sanitize = (raw: string): string =>
+          raw.normalize('NFD').replace(/[̀-ͯ]/g, '')
+            .toUpperCase().trim()
+            .replace(/[^A-Z0-9_-]/g, '_')
+            .replace(/_+/g, '_').replace(/^_|_$/g, '')
+            .slice(0, 40);
+        const codigoBase = c.codigo && (c.codigo as string).trim()
+          ? sanitize(c.codigo as string)
+          : `COMPOSIC_${sanitize(c.item_codigo as string)}`;
+        const itemSuffix = sanitize(c.item_codigo as string).slice(0, 8);
+        const mybaseCode = (codigoBase + (codigoBase.endsWith(itemSuffix) ? '' : `_${itemSuffix}`)).slice(0, 50);
         const code = isPropria ? mybaseCode : (c.codigo ?? '');
         if (!code) continue;
         if (isPropria && !c.orcafascio_composition_id) continue;

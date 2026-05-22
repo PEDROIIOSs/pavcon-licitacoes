@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server';
 import { formatBRL, formatDate, statusColor, statusLabel } from '@/lib/utils';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { ChecklistPreCadastro } from './checklist-pre-cadastro';
 import { DiagnosticoCadastro } from './diagnostico-cadastro';
 import { ExtractionPanel } from './extraction-panel';
 import { PollRefresher } from './poll-refresher';
@@ -247,6 +248,25 @@ export default async function LicitacaoDetailPage({
                 ja_revisada: !!ultimaExtracao.json_corrigido,
               }
             : null}
+        />
+
+        {/* Checklist pré-cadastro: mostra dados que precisam validação manual
+            (data-base, regime, BDI, leis sociais, gaps na extração).
+            Reduz "bot extraiu errado" silencioso. */}
+        <ChecklistPreCadastro
+          servicos={(servicosDetalhados ?? []).map((s) => ({
+            item_codigo: s.item_codigo,
+            descricao: s.descricao,
+            fonte: s.fonte,
+            preco_total: s.preco_total != null ? Number(s.preco_total) : null,
+          }))}
+          totalExtraido={totalComBdi}
+          cabecalho={
+            (ultimaExtracao?.json_corrigido?.cabecalho ??
+              ultimaExtracao?.json_extraido?.cabecalho ??
+              null) as Parameters<typeof ChecklistPreCadastro>[0]['cabecalho']
+          }
+          jaCadastrou={!!licitacao.cadastro_resumo}
         />
 
         {/* Painel de diagnóstico do cadastramento — só aparece quando já cadastrou

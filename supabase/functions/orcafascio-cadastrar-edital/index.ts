@@ -440,19 +440,34 @@ Deno.serve(async (req: Request) => {
         continue;
       }
 
-      // Code da composição no MyBase. Formato 'COMPOSIC_<item_codigo>':
-      // - mais legível na tela do orçamento (col CÓDIGO mostra 'COMPOSIC_1.1')
-      // - bate com o padrão do edital ('COMPOSIC', 'COMPOSIÇÃO' são genéricos)
-      // - sufixo item_codigo garante unicidade dentro da licitação
-      // OBS: companies com várias licitações podem ter colisão (mesmo item_codigo
-      // "1.1" em editais diferentes) — mas o find-or-create reusa, sem 422.
-      // IMPORTANTE: removemos PONTOS do code também — find_by_code do
+      // Code da composição no MyBase. Estratégia:
+      // 1. SE o edital trouxe um código próprio (comp.codigo, ex: "ADM LOCAL",
+      //    "REG1"), usa esse (mais legível pro orçamentista — bate com a
+      //    nomenclatura do órgão).
+      // 2. Senão, fallback pra 'COMPOSIC_<item_codigo>'.
+      // Em todo caso, sanitiza removendo PONTOS/espaços — find_by_code do
       // Orçafascio retorna 500 silencioso pra codes com múltiplos pontos
       // (ex: "COMPOSIC_1.1.1"). Trocando ponto por underscore resolve.
-      const sanitized = comp.item_codigo
-        .replace(/[^A-Za-z0-9_-]/g, '_')
-        .slice(0, 40);
-      const codigo = `COMPOSIC_${sanitized}`.slice(0, 50);
+      // Sanitiza string pra ser code válido: trim + upper + remove acentos +
+      // troca não-alfanuméricos por underscore. Mantém máximo 40 chars.
+      const sanitize = (raw: string): string =>
+        raw
+          .normalize('NFD')
+          .replace(/[̀-ͯ]/g, '') // remove acentos
+          .toUpperCase()
+          .trim()
+          .replace(/[^A-Z0-9_-]/g, '_')
+          .replace(/_+/g, '_')
+          .replace(/^_|_$/g, '')
+          .slice(0, 40);
+
+      const codigoBase = comp.codigo && comp.codigo.trim()
+        ? sanitize(comp.codigo)
+        : `COMPOSIC_${sanitize(comp.item_codigo)}`;
+      // Sufixo item_codigo curto garante unicidade quando 2 composições do
+      // edital usam o mesmo código próprio (ex: "REG1" em capítulos diferentes)
+      const itemSuffix = sanitize(comp.item_codigo).slice(0, 8);
+      const codigo = (codigoBase + (codigoBase.endsWith(itemSuffix) ? '' : `_${itemSuffix}`)).slice(0, 50);
       const descricao = (comp.descricao ?? 'Composição própria do edital').slice(0, 500);
       const unidade = (comp.unidade ?? 'Un').slice(0, 20);
 
