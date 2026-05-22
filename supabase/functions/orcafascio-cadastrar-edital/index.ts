@@ -685,11 +685,13 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      // Se reusou uma composição que já tem itens, NÃO adiciona de novo
-      // (evita duplicar). Só adiciona se está vazia (recover de attempt
-      // que criou comp mas falhou no addItems).
-      const itensExistentes = ((created as { items?: unknown[] }).items ?? []).length;
-      if (items.length > 0 && itensExistentes === 0) {
+      // SEMPRE tenta adicionar items, mesmo se a composição já tem alguns
+      // (caso comum em retry após cadastro parcial). O Orçafascio rejeita
+      // duplicados com 422 "already_in_use" que o fallback item-a-item
+      // trata como sucesso silencioso. Isso garante que retries DEPOIS de
+      // um cadastro com erros 500 silenciosos consigam preencher os
+      // sub-items que ficaram faltando.
+      if (items.length > 0) {
         try {
           await addItemsToComposition(ctx, created.id, items);
           itensAdicionados += items.length;
