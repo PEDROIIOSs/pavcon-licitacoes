@@ -614,8 +614,24 @@ Deno.serve(async (req: Request) => {
       // Cruzamento payload → sub_item original (pro fallback poder logar
       // descrição/preço quando o code falha)
       const itemPayloadToSub = new Map<string, ComposicaoPropriaItem>();
+      // Sub-items descartados pelo filtro (codigo NULL, coef NULL/zero).
+      // Antes esses eram pulados silenciosamente — agora viram warning
+      // consolidado no fim, agrupado por motivo, pra o orçamentista saber
+      // exatamente o que faltou e por quê.
+      const descartados: Array<{ motivo: string; descricao: string; codigo: string | null }> = [];
       for (const s of subs) {
-        if (!s.codigo || s.coeficiente == null || s.coeficiente <= 0) continue;
+        if (!s.codigo || s.coeficiente == null || s.coeficiente <= 0) {
+          let motivo: string;
+          if (!s.codigo) motivo = 'sem código';
+          else if (s.coeficiente == null) motivo = 'sem coeficiente';
+          else motivo = 'coeficiente zero';
+          descartados.push({
+            motivo,
+            descricao: (s.descricao ?? '(sem descrição)').slice(0, 60),
+            codigo: s.codigo,
+          });
+          continue;
+        }
         const isAuxPropria = s.fonte === 'PROPRIA' && s.classe === 'COMPOSICAO';
         if (isAuxPropria) {
           const aux = auxByOriginalCode.get(s.codigo);
@@ -649,6 +665,23 @@ Deno.serve(async (req: Request) => {
       if (subItensManuais.length > 0) {
         warnings.push(
           `Composição "${codigo}": ${subItensManuais.length} sub-item(ns) PROPRIA auxiliar — Orçafascio API não aceita resource MyBase como sub-item, adicione manualmente na UI: ${subItensManuais.join('; ')}`,
+        );
+      }
+      // Warning consolidado dos sub-items descartados pelo filtro de validação.
+      // Agrupa por motivo pra a mensagem ficar legível mesmo com vários casos.
+      if (descartados.length > 0) {
+        const porMotivo = new Map<string, string[]>();
+        for (const d of descartados) {
+          const lista = porMotivo.get(d.motivo) ?? [];
+          lista.push(d.codigo ? `${d.codigo} ${d.descricao}` : d.descricao);
+          porMotivo.set(d.motivo, lista);
+        }
+        const partes: string[] = [];
+        for (const [motivo, items] of porMotivo.entries()) {
+          partes.push(`${items.length} ${motivo} ("${items.slice(0, 3).join('", "')}"${items.length > 3 ? ` e mais ${items.length - 3}` : ''})`);
+        }
+        warnings.push(
+          `Composição "${codigo}": ${descartados.length} sub-item(ns) descartados na extração — ${partes.join('; ')}. Corrija o JSON do edital ou edite a composição manualmente no Orçafascio.`,
         );
       }
 
