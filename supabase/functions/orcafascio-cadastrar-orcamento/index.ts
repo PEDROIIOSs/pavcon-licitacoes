@@ -426,6 +426,42 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // ---- 8.5) Verificação pós-cadastro: confirma que o orçamento existe ----
+    // Bug observado: em alguns casos o orçamento criado some/é movido pra
+    // lixeira pelo próprio Orçafascio depois dos batches retornarem 200 OK.
+    // Sem essa verificação, o cadastro_resumo dizia "OK" mas o user abria
+    // depois e a URL retornava 302→listagem. Faz GET no budget URL — se
+    // redirect, sinaliza erro fatal no warning.
+    let orcamentoVerificado = false;
+    try {
+      const verifyResp = await fetch(`https://app.orcafascio.com/orc/orcamentos/${budget_id}`, {
+        method: 'GET',
+        headers: {
+          Cookie: ctx.session.cookie_header,
+          'User-Agent': 'pavcon-licitacoes/0.1 (post-verify)',
+          Accept: 'text/html',
+        },
+        redirect: 'manual',
+      });
+      const location = verifyResp.headers.get('location') ?? '';
+      if (verifyResp.status === 200) {
+        orcamentoVerificado = true;
+      } else if (verifyResp.status === 302 || verifyResp.status === 303) {
+        if (location.includes('/login')) {
+          warnings.push('Verificação pós-cadastro: sessão expirou. Recarregue e tente abrir o orçamento manualmente.');
+        } else {
+          // Redirect pra listagem = orçamento sumiu
+          warnings.push(
+            `⚠ ORÇAMENTO SUMIU APÓS CADASTRO: GET /orc/orcamentos/${budget_id} retornou 302→${location}. Possível bug do Orçafascio ou conflito. Recadastre.`,
+          );
+        }
+      } else if (verifyResp.status === 404) {
+        warnings.push(`⚠ Orçamento ${budget_id} retornou 404 imediatamente após cadastro. Recadastre.`);
+      }
+    } catch (e) {
+      warnings.push(`Verificação pós-cadastro falhou (rede): ${e instanceof Error ? e.message.slice(0, 120) : 'erro'}`);
+    }
+
     // ---- 9) Persiste budget_id na licitação + transição --------------------
     // PROPOSTA: não toca no status (orçamento base mantém fase1_concluida)
     if (!isProposta) {
@@ -442,6 +478,7 @@ Deno.serve(async (req: Request) => {
         leis_sociais_horista: leisHorista,
         bancos_configurados: bancos.map((b) => `${b.nome} ${b.estado ?? ''} ${b.data}`.trim()),
         warnings,
+        orcamento_verificado: orcamentoVerificado,
       };
       await admin
         .from('licitacoes')
