@@ -236,14 +236,27 @@ Deno.serve(async (req: Request) => {
     // Normaliza nome do banco + UF padrão pros bancos que só existem em
     // um estado. Sem isso, addBases retorna 422 "Local not found"
     // (ORSE só em SE) ou "Base not found" (SICRO → precisa SICRO3).
-    interface BankConfig { name: string; local: string }
-    const BANK_NORMALIZATION: Record<string, BankConfig | { skipUf: false; renameOnly: string }> = {
-      SICRO: { name: 'SICRO3', local: '' },     // local segue ufEdital
+    // Mapeamento de bancos: nome canônico + UF fixa (quando regional) +
+    // formato de versão. Alguns bancos não usam "MM/AAAA":
+    //   - SEINFRA: número sequencial sem barra (ex: "028", "030")
+    //   - Outros conformidades específicas
+    interface BankConfig {
+      name: string;
+      local: string;
+      /** Formato de versão preferido. Default = MM/AAAA do edital */
+      versionFormat?: 'mm_yyyy' | 'seinfra_num';
+      /** Versão hard-coded mais recente conhecida (fallback) */
+      versionFallback?: string;
+    }
+    const BANK_NORMALIZATION: Record<string, BankConfig> = {
+      SICRO: { name: 'SICRO3', local: '' },
       SICRO3: { name: 'SICRO3', local: '' },
       SINAPI: { name: 'SINAPI', local: '' },
-      SBC: { name: 'SBC', local: 'BA' },         // SBC fixo em BA
-      ORSE: { name: 'ORSE', local: 'SE' },       // ORSE fixo em SE
-      SEINFRA: { name: 'SEINFRA', local: 'CE' }, // SEINFRA fixo em CE
+      SBC: { name: 'SBC', local: 'BA' },
+      ORSE: { name: 'ORSE', local: 'SE' },
+      // SEINFRA usa versionamento sequencial ("028", "029" etc), NÃO MM/AAAA.
+      // Sem versão correta, addBases retorna 422 "Version not found".
+      SEINFRA: { name: 'SEINFRA', local: 'CE', versionFormat: 'seinfra_num', versionFallback: '028' },
       SETOP: { name: 'SETOP', local: 'MG' },
       EMBASA: { name: 'EMBASA', local: 'BA' },
       FDE: { name: 'FDE', local: 'SP' },
@@ -258,16 +271,23 @@ Deno.serve(async (req: Request) => {
       name: string; local: string; version: string; status: boolean; with_labor_charges?: boolean;
     }> = [];
     for (const nome of basesEdital) {
-      const cfg = BANK_NORMALIZATION[nome] as BankConfig | undefined;
+      const cfg = BANK_NORMALIZATION[nome];
       if (!cfg) {
         warnings.push(`Banco "${nome}" não mapeado em BANK_NORMALIZATION — pulando.`);
         continue;
       }
+      // Resolve versão conforme formato do banco
+      let version = dataBaseEdital;
+      if (cfg.versionFormat === 'seinfra_num') {
+        // SEINFRA não aceita MM/AAAA. Tenta extrair número do data_base_descricao
+        // (ex: "SEINFRA 028" no cabecalho), senão usa fallback.
+        const m = (cabecalho.data_base_descricao ?? '').match(/SEINFRA[^\d]*(\d{2,4})/i);
+        version = m ? m[1].padStart(3, '0') : (cfg.versionFallback ?? '028');
+      }
       basesDaComposicao.push({
         name: cfg.name,
-        // Usa local fixo do banco (ORSE→SE, SBC→BA) se houver; senão usa UF do edital
         local: cfg.local || ufEdital,
-        version: dataBaseEdital,
+        version,
         status: true,
         with_labor_charges: !cabecalho.com_desoneracao,
       });
