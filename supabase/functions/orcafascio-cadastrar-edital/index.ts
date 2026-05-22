@@ -228,6 +228,31 @@ Deno.serve(async (req: Request) => {
       return `${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
     }
     const dataBaseEdital = parseDataBase(cabecalho.data_base_descricao);
+
+    // Tenta extrair data ESPECÍFICA de cada banco do data_base_descricao.
+    // Ex: "SINAPI PI 02/2026, SEINFRA CE 28, ORSE SE 01/2026, SICRO PI 10/2025"
+    //  → SINAPI: "02/2026", SEINFRA: "28", ORSE: "01/2026", SICRO: "10/2025"
+    function parseDataBasePorBanco(descricao: string | undefined, banco: string): string | null {
+      if (!descricao) return null;
+      // Variantes: SICRO/SICRO3, ORSE, SINAPI, SEINFRA, SBC, etc
+      const variants = [banco, banco.replace(/3$/, '')];
+      for (const v of variants) {
+        // Match: BANCO seguido de até 30 chars não-numéricos + número
+        const re = new RegExp(`${v}\\b[^,/]*?(\\d{1,2}\\s*\\/\\s*\\d{2,4}|\\b\\d{2,3}\\b)`, 'i');
+        const m = descricao.match(re);
+        if (m) {
+          // Normaliza formato MM/AAAA (ou retorna número puro pra SEINFRA)
+          const raw = m[1].trim();
+          if (raw.includes('/')) {
+            const [mm, yy] = raw.split('/').map((p) => p.trim());
+            const year = yy.length === 2 ? `20${yy}` : yy;
+            return `${mm.padStart(2, '0')}/${year}`;
+          }
+          return raw; // ex: "28" pra SEINFRA
+        }
+      }
+      return null;
+    }
     const ufEdital = (cabecalho.uf ?? licitacao.uf ?? 'SP').toString().toUpperCase().slice(0, 2);
     const basesEdital = Array.isArray(cabecalho.bases_utilizadas)
       ? cabecalho.bases_utilizadas.map((b) => String(b).toUpperCase().trim()).filter((b) => b !== 'PROPRIA')
@@ -276,13 +301,21 @@ Deno.serve(async (req: Request) => {
         warnings.push(`Banco "${nome}" não mapeado em BANK_NORMALIZATION — pulando.`);
         continue;
       }
-      // Resolve versão conforme formato do banco
-      let version = dataBaseEdital;
+      // Resolve versão ESPECÍFICA do banco do cabecalho (data_base_descricao
+      // pode ter datas diferentes pra cada banco). Fallbacks em ordem:
+      // 1. Match específico do banco no data_base_descricao
+      // 2. Data genérica do edital (parseDataBase)
+      // 3. versionFallback do BANK_NORMALIZATION (último recurso)
+      const especifica = parseDataBasePorBanco(cabecalho.data_base_descricao, cfg.name);
+      let version = especifica ?? dataBaseEdital;
       if (cfg.versionFormat === 'seinfra_num') {
-        // SEINFRA não aceita MM/AAAA. Tenta extrair número do data_base_descricao
-        // (ex: "SEINFRA 028" no cabecalho), senão usa fallback.
-        const m = (cabecalho.data_base_descricao ?? '').match(/SEINFRA[^\d]*(\d{2,4})/i);
-        version = m ? m[1].padStart(3, '0') : (cfg.versionFallback ?? '028');
+        // SEINFRA não aceita MM/AAAA. Espera "028", "029" etc.
+        // Se o match específico já trouxe número puro, usa; senão fallback.
+        if (especifica && /^\d+$/.test(especifica)) {
+          version = especifica.padStart(3, '0');
+        } else {
+          version = cfg.versionFallback ?? '028';
+        }
       }
       basesDaComposicao.push({
         name: cfg.name,

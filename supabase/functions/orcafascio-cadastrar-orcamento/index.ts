@@ -118,19 +118,37 @@ const ORCAFASCIO_BANKS: Record<string, { has_state: boolean }> = {
 
 // Extrai data MM/AAAA do data_base_descricao pra um banco específico.
 // Estado só é relevante pra bancos com `has_state: true` (SINAPI, SICRO3, etc.).
+//
+// data_base_descricao costuma ser separado por vírgula com formatos mistos:
+//   "SINAPI PI 02/2026, SEINFRA CE 28, ORSE SE 01/2026, SICRO PI 10/2025"
+// → SEINFRA: data="28" (não MM/AAAA), ORSE: estado="SE" + data="01/2026"
 function inferBaseData(
   cabecalho: Record<string, unknown> | null,
   banco: string,
 ): { estado: string; data: string } {
   const desc = String(cabecalho?.data_base_descricao ?? '');
   const ufLicit = String(cabecalho?.uf ?? 'PI').toUpperCase().slice(0, 2);
-  // Variantes do regex pra cobrir "SICRO3" sendo procurado como "SICRO" também
+  // Split por vírgula: cada token contém info de 1 banco
+  const tokens = desc.split(/[,;]/).map((t) => t.trim());
   const variantes = [banco, banco.replace(/3$/, ''), banco + '3'];
   for (const v of variantes) {
-    const re = new RegExp(`${v}[^\\d]*?([A-Z]{2})?[^\\d]*?(\\d{2}\\/\\d{4})`, 'i');
-    const m = desc.match(re);
-    if (m) {
-      return { estado: (m[1] ?? ufLicit).toUpperCase(), data: m[2] };
+    const re = new RegExp(`^\\s*${v}\\b`, 'i');
+    const token = tokens.find((t) => re.test(t));
+    if (!token) continue;
+    const ufMatch = token.match(/\b([A-Z]{2})\b/);
+    const dataMatch = token.match(/(\d{1,2}\/\d{2,4})|\b(\d{2,3})\b(?![A-Za-z])/);
+    let data = '';
+    if (dataMatch) {
+      if (dataMatch[1]) {
+        const [mm, yy] = dataMatch[1].split('/');
+        const year = yy.length === 2 ? `20${yy}` : yy;
+        data = `${mm.padStart(2, '0')}/${year}`;
+      } else if (dataMatch[2]) {
+        data = dataMatch[2]; // ex: "28" pra SEINFRA
+      }
+    }
+    if (data) {
+      return { estado: (ufMatch?.[1] ?? ufLicit).toUpperCase(), data };
     }
   }
   // Fallback: mês passado
