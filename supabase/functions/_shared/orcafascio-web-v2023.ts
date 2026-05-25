@@ -528,12 +528,24 @@ export function uuidv4(): string {
   });
 }
 
-/** Mapeia fonte do edital pro `base` esperado pela API v2023. */
+/** Mapeia fonte do edital pro `base` esperado pela API v2023.
+ * IMPORTANTE: bancos não listados aqui caem em "OUTRA" no orçamento, e o
+ * Orçafascio não resolve os códigos → preço R$ 0. Manter sincronizado com
+ * ORCAFASCIO_BANKS em orcafascio-cadastrar-orcamento/index.ts. */
 export function fonteToBase(fonte: string | null | undefined): string {
   if (!fonte) return 'OUTRA';
-  const f = fonte.toUpperCase();
-  if (['SINAPI', 'SBC', 'SICRO', 'ORSE', 'SEINFRA', 'FDE', 'SUDECAP'].includes(f)) return f;
+  const f = fonte.toUpperCase().trim();
   if (f === 'PROPRIA') return 'MYBASE';
+  // SICRO sem versão → SICRO3 (versão atual). SICRO antigo (sem 3) retorna
+  // codes 500 silenciosos quando inexistente no SICRO3 atual.
+  if (f === 'SICRO' || f === 'SICRO3') return 'SICRO3';
+  if ([
+    'SINAPI', 'SBC', 'SEINFRA', 'ORSE', 'FDE', 'SUDECAP', 'CPOS', 'SETOP',
+    'EMBASA', 'EMOP', 'SCO', 'IOPES', 'AGESUL', 'SEDOP', 'DERPR', 'CAEMA',
+    'CAERN', 'COMPESA', 'SIURB',
+  ].includes(f)) return f;
+  // AGETOP CIVIL / AGETOP RODOVIARIA mantém o sufixo
+  if (f.startsWith('AGETOP')) return f;
   return 'OUTRA';
 }
 

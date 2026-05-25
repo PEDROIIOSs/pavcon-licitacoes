@@ -291,6 +291,13 @@ Deno.serve(async (req: Request) => {
       AGESUL: { name: 'AGESUL', local: 'MS' },
       EMOP: { name: 'EMOP', local: 'RJ' },
       SCO: { name: 'SCO', local: 'RJ' },
+      SEDOP: { name: 'SEDOP', local: 'PA' },     // Pará
+      DERPR: { name: 'DERPR', local: 'PR' },
+      CAEMA: { name: 'CAEMA', local: 'MA' },
+      CAERN: { name: 'CAERN', local: 'RN' },
+      COMPESA: { name: 'COMPESA', local: 'PE' },
+      SIURB: { name: 'SIURB', local: 'SP' },
+      MAPP: { name: 'MAPP', local: '' },         // fallback UF do edital
     };
     const basesDaComposicao: Array<{
       name: string; local: string; version: string; status: boolean; with_labor_charges?: boolean;

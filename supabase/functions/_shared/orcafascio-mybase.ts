@@ -582,7 +582,11 @@ export function fonteToBank(fonte: string | null | undefined): string {
   if (!fonte) return 'OUTROS';
   const f = fonte.toUpperCase().trim();
   if (f === 'SICRO' || f === 'SICRO3') return 'SICRO3';
-  if (['SINAPI', 'SBC', 'ORSE', 'SEINFRA', 'FDE', 'SETOP', 'EMBASA', 'CPOS', 'EMOP', 'SCO', 'SUDECAP', 'IOPES', 'AGESUL'].includes(f)) return f;
+  if ([
+    'SINAPI', 'SBC', 'ORSE', 'SEINFRA', 'FDE', 'SETOP', 'EMBASA', 'CPOS',
+    'EMOP', 'SCO', 'SUDECAP', 'IOPES', 'AGESUL', 'SEDOP', 'DERPR', 'CAEMA',
+    'CAERN', 'COMPESA', 'SIURB',
+  ].includes(f)) return f;
   if (f === 'PROPRIA') return 'MYBASE';
   return 'OUTROS';
 }
