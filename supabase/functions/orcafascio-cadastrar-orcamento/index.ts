@@ -437,8 +437,17 @@ Deno.serve(async (req: Request) => {
     }
 
     if (items.length > 0) {
-      // Envia em chunks de até 50 itens pra evitar request muito grande
-      const CHUNK = 50;
+      // Envia em UM chunk grande sempre que possível. Bug observado em PM
+      // CASTANHAL: com chunks de 50, o 2º chunk retornava 200 OK mas 4 dos
+      // 17 macrosserviços ficavam "perdidos" no Orçafascio (provavelmente
+      // race condition na referência parent_descr entre chunks independentes).
+      // Mandando tudo num só batch o Orçafascio processa em ordem com
+      // consistência hierárquica garantida.
+      //
+      // Limite empírico: ~300 items dentro do limite de body urlencoded.
+      // Pra orçamentos maiores, fragmenta em chunks de 300 — risco de
+      // race entre chunks volta, mas raro.
+      const CHUNK = 300;
       for (let i = 0; i < items.length; i += CHUNK) {
         await addItemsBatch(ctx, budget_id, items.slice(i, i + CHUNK));
       }
