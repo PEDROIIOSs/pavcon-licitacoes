@@ -6,6 +6,7 @@ import { redirect } from 'next/navigation';
 
 interface ActionResult {
   error?: string;
+  licitacao_id?: string;
 }
 
 const TIPOS_VALIDOS = new Set([
@@ -16,24 +17,47 @@ const TIPOS_VALIDOS = new Set([
   'anexo',
 ]);
 
-export async function createLicitacao(formData: FormData): Promise<ActionResult> {
-  const titulo = String(formData.get('titulo') ?? '').trim();
-  const files = formData.getAll('arquivos') as File[];
-  const tipos = formData.getAll('tipos').map(String);
+interface ArquivoUploaded {
+  storage_path: string;
+  filename: string;
+  size: number;
+  mime_type: string;
+  hash_sha256: string;
+  tipo: string;
+}
+
+/**
+ * Cria licitação a partir de arquivos JÁ UPLOADADOS pelo cliente direto
+ * no Supabase Storage. Server action só recebe metadata (pequena), evitando
+ * o limite de 4.5MB de payload das Vercel Serverless Functions.
+ *
+ * O cliente é responsável por:
+ *  1. Validar tipo MIME e tamanho
+ *  2. Calcular SHA-256 (file ainda em memória)
+ *  3. Upload via supabase.storage.from('editais').upload(...)
+ *  4. Chamar essa action com o path retornado
+ */
+export async function createLicitacao(input: {
+  titulo: string;
+  arquivos: ArquivoUploaded[];
+}): Promise<ActionResult> {
+  const titulo = (input.titulo ?? '').trim();
+  const arquivos = input.arquivos ?? [];
 
   if (!titulo) return { error: 'Título é obrigatório.' };
-  if (files.length === 0) return { error: 'Selecione pelo menos 1 PDF.' };
-  if (files.length !== tipos.length) {
-    return { error: 'Número de tipos não bate com número de arquivos.' };
-  }
+  if (arquivos.length === 0) return { error: 'Selecione pelo menos 1 PDF.' };
 
-  for (let i = 0; i < files.length; i++) {
-    const f = files[i];
-    if (!f || f.size === 0) return { error: `Arquivo #${i + 1} vazio.` };
-    if (f.type !== 'application/pdf') return { error: `"${f.name}" não é PDF.` };
-    if (f.size > 100 * 1024 * 1024) return { error: `"${f.name}" passa de 100 MB.` };
-    if (!TIPOS_VALIDOS.has(tipos[i])) {
-      return { error: `Tipo "${tipos[i]}" inválido pra "${f.name}".` };
+  for (let i = 0; i < arquivos.length; i++) {
+    const a = arquivos[i];
+    if (!a.storage_path) return { error: `Arquivo #${i + 1} sem storage_path.` };
+    if (a.size <= 0) return { error: `Arquivo #${i + 1} vazio.` };
+    if (a.mime_type !== 'application/pdf') return { error: `"${a.filename}" não é PDF.` };
+    if (a.size > 100 * 1024 * 1024) return { error: `"${a.filename}" passa de 100 MB.` };
+    if (!TIPOS_VALIDOS.has(a.tipo)) {
+      return { error: `Tipo "${a.tipo}" inválido pra "${a.filename}".` };
+    }
+    if (!/^[a-f0-9]{64}$/.test(a.hash_sha256)) {
+      return { error: `Hash inválido pra "${a.filename}".` };
     }
   }
 
@@ -53,54 +77,27 @@ export async function createLicitacao(formData: FormData): Promise<ActionResult>
     return { error: `Falha ao criar orçamento: ${licErr?.message ?? 'sem dado'}` };
   }
 
-  const uploadedPaths: string[] = [];
-
-  // 2) Upload + 3) hash + 4) row em licitacao_arquivos — pra cada arquivo
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i];
-    const tipo = tipos[i];
-    const safeName = file.name.replace(/[^\w.-]+/g, '_');
-    const storagePath = `${licitacao.id}/${Date.now()}_${i}_${safeName}`;
-
-    const { error: uploadErr } = await supabase
-      .storage
-      .from('editais')
-      .upload(storagePath, file, { contentType: 'application/pdf', upsert: false });
-    if (uploadErr) {
-      // Cleanup tudo
-      if (uploadedPaths.length > 0) {
-        await supabase.storage.from('editais').remove(uploadedPaths);
-      }
-      await admin.from('licitacoes').delete().eq('id', licitacao.id);
-      return { error: `Falha no upload de "${file.name}": ${uploadErr.message}` };
-    }
-    uploadedPaths.push(storagePath);
-
-    const buffer = new Uint8Array(await file.arrayBuffer());
-    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
-    const hashHex = Array.from(new Uint8Array(hashBuffer))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
-
-    const { error: arqErr } = await admin.from('licitacao_arquivos').insert({
-      licitacao_id: licitacao.id,
-      tipo,
-      storage_bucket: 'editais',
-      storage_path: storagePath,
-      filename_original: file.name,
-      mime_type: file.type,
-      size_bytes: file.size,
-      hash_sha256: hashHex,
-      enviado_por: user.id,
-    });
-    if (arqErr) {
-      await supabase.storage.from('editais').remove(uploadedPaths);
-      await admin.from('licitacoes').delete().eq('id', licitacao.id);
-      return { error: `Falha ao registrar "${file.name}": ${arqErr.message}` };
-    }
+  // 2) Insere rows em licitacao_arquivos referenciando os paths já uploadados
+  const rows = arquivos.map((a) => ({
+    licitacao_id: licitacao.id,
+    tipo: a.tipo,
+    storage_bucket: 'editais',
+    storage_path: a.storage_path,
+    filename_original: a.filename,
+    mime_type: a.mime_type,
+    size_bytes: a.size,
+    hash_sha256: a.hash_sha256,
+    enviado_por: user.id,
+  }));
+  const { error: arqErr } = await admin.from('licitacao_arquivos').insert(rows);
+  if (arqErr) {
+    // Cleanup: apaga arquivos do storage + licitação
+    await supabase.storage.from('editais').remove(arquivos.map((a) => a.storage_path));
+    await admin.from('licitacoes').delete().eq('id', licitacao.id);
+    return { error: `Falha ao registrar arquivos: ${arqErr.message}` };
   }
 
-  // 5) Avança status: rascunho → aguardando_extracao
+  // 3) Avança status: rascunho → aguardando_extracao
   await admin
     .from('licitacoes')
     .update({ status: 'aguardando_extracao' })

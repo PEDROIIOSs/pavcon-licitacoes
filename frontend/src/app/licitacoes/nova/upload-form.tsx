@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useTransition, type ChangeEvent } from 'react';
+import { createClient } from '@/lib/supabase/client';
 import { createLicitacao } from './actions';
 
 type ArquivoTipo =
@@ -23,11 +24,23 @@ interface ArquivoSelecionado {
   tipo: ArquivoTipo;
 }
 
+// Hash SHA-256 do arquivo (calculado no browser via WebCrypto — não passa
+// pelo server, mantendo a server action leve). Pra PDFs de 50MB roda em
+// ~1-2s.
+async function hashFile(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
 export function UploadForm() {
   const [titulo, setTitulo] = useState('');
   const [arquivos, setArquivos] = useState<ArquivoSelecionado[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const [progress, setProgress] = useState<string | null>(null);
 
   function onFilesChange(e: ChangeEvent<HTMLInputElement>) {
     setError(null);
@@ -65,28 +78,98 @@ export function UploadForm() {
     setArquivos((prev) => prev.map((a, i) => i === idx ? { ...a, tipo } : a));
   }
 
+  function handleSubmit() {
+    if (arquivos.length === 0) {
+      setError('Selecione pelo menos 1 PDF.');
+      return;
+    }
+    if (!titulo.trim()) {
+      setError('Informe um título descritivo.');
+      return;
+    }
+    setError(null);
+    startTransition(async () => {
+      try {
+        const supabase = createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+          setError('Sessão expirada — faça login de novo.');
+          return;
+        }
+
+        // Sufixo único pra esta sessão de upload — todos os arquivos vão na
+        // mesma "pasta temp" no Storage, e movemos pra <licitacao_id>/ quando
+        // a row da licitação é criada. Como ainda não temos o id, usa o
+        // user.id + timestamp como prefixo.
+        const stamp = `${user.id}/${Date.now()}`;
+        const uploadedMeta: Array<{
+          storage_path: string;
+          filename: string;
+          size: number;
+          mime_type: string;
+          hash_sha256: string;
+          tipo: ArquivoTipo;
+        }> = [];
+
+        for (let i = 0; i < arquivos.length; i++) {
+          const a = arquivos[i];
+          setProgress(`(${i + 1}/${arquivos.length}) calculando hash de ${a.file.name}…`);
+          const hashHex = await hashFile(a.file);
+
+          setProgress(`(${i + 1}/${arquivos.length}) subindo ${a.file.name} (${(a.file.size / 1024 / 1024).toFixed(1)} MB)…`);
+          const safeName = a.file.name.replace(/[^\w.-]+/g, '_');
+          const storagePath = `${stamp}_${i}_${safeName}`;
+
+          const { error: upErr } = await supabase.storage
+            .from('editais')
+            .upload(storagePath, a.file, {
+              contentType: 'application/pdf',
+              upsert: false,
+            });
+          if (upErr) {
+            // Cleanup parciais
+            if (uploadedMeta.length > 0) {
+              await supabase.storage.from('editais').remove(uploadedMeta.map((m) => m.storage_path));
+            }
+            setError(`Falha no upload de "${a.file.name}": ${upErr.message}`);
+            setProgress(null);
+            return;
+          }
+          uploadedMeta.push({
+            storage_path: storagePath,
+            filename: a.file.name,
+            size: a.file.size,
+            mime_type: a.file.type,
+            hash_sha256: hashHex,
+            tipo: a.tipo,
+          });
+        }
+
+        setProgress('Criando orçamento…');
+        const result = await createLicitacao({
+          titulo: titulo.trim(),
+          arquivos: uploadedMeta,
+        });
+        if (result?.error) {
+          // Action retornou erro — cleanup
+          await supabase.storage.from('editais').remove(uploadedMeta.map((m) => m.storage_path));
+          setError(result.error);
+          setProgress(null);
+        }
+        // Sucesso → action faz redirect; nada mais aqui
+      } catch (e) {
+        setError(`Erro inesperado: ${e instanceof Error ? e.message : String(e)}`);
+        setProgress(null);
+      }
+    });
+  }
+
   return (
     <form
       className="space-y-5 rounded-lg border border-zinc-200 bg-white p-6"
-      action={(formData) => {
-        if (arquivos.length === 0) {
-          setError('Selecione pelo menos 1 PDF.');
-          return;
-        }
-        if (!titulo.trim()) {
-          setError('Informe um título descritivo.');
-          return;
-        }
-        // Append files manually since useTransition+server action don't preserve File[]
-        formData.delete('arquivos');
-        for (const a of arquivos) {
-          formData.append('arquivos', a.file);
-          formData.append('tipos', a.tipo);
-        }
-        startTransition(async () => {
-          const result = await createLicitacao(formData);
-          if (result?.error) setError(result.error);
-        });
+      onSubmit={(e) => {
+        e.preventDefault();
+        handleSubmit();
       }}
     >
       <label className="block">
@@ -157,6 +240,10 @@ export function UploadForm() {
             ))}
           </ul>
         </div>
+      )}
+
+      {progress && (
+        <div className="rounded-md bg-blue-50 p-3 text-xs text-blue-900">{progress}</div>
       )}
 
       {error && (
