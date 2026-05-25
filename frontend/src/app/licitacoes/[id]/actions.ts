@@ -90,7 +90,7 @@ export async function saveExtractionEdits(
     item_pai_codigo: item.pai,
     tipo_linha: item.tipo,
     codigo: item.codigo,
-    fonte: item.fonte,
+    fonte: normalizeFonte(item.fonte),
     descricao: item.descricao,
     unidade: item.unidade,
     quantidade: item.quantidade,
@@ -98,7 +98,9 @@ export async function saveExtractionEdits(
     preco_unitario_com_bdi: item.preco_unitario_com_bdi,
     preco_total: item.preco_total,
     ordem: idx,
-    metadata: {},
+    metadata: item.fonte && normalizeFonte(item.fonte) === 'OUTRA' && item.fonte.toUpperCase() !== 'OUTRA'
+      ? { fonte_original: item.fonte }
+      : {},
   }));
 
   if (composicoesRows.length > 0) {
@@ -237,6 +239,34 @@ function stripCodeFences(s: string): string {
   return m ? m[1].trim() : s.trim();
 }
 
+// Valores aceitos pelo enum `fonte_referencia` no Postgres. Manter
+// sincronizado com a migration de bases (SQL ALTER TYPE ADD VALUE).
+const FONTES_VALIDAS = new Set([
+  'SINAPI', 'SICRO', 'SICRO3', 'SEINFRA', 'ORSE', 'SBC', 'PROPRIA', 'OUTRA',
+  'SEDOP', 'SETOP', 'EMBASA', 'FDE', 'CPOS', 'SUDECAP', 'IOPES', 'AGESUL',
+  'EMOP', 'SCO', 'DERPR', 'CAEMA', 'CAERN', 'COMPESA', 'SIURB', 'AGETOP', 'MAPP',
+]);
+
+/** Normaliza `fonte` do JSON extraído pra um valor aceito pelo enum do banco.
+ * Aceita variantes comuns vindas do LLM (SICRO/SICRO3, SICRO2 antigo, etc) e
+ * cai em "OUTRA" como fallback defensivo pra não quebrar o insert. */
+function normalizeFonte(raw: string | null | undefined): string | null {
+  if (raw == null) return null;
+  const u = String(raw).toUpperCase().trim();
+  if (!u) return null;
+  // Normalizações conhecidas
+  if (u === 'SICRO2' || u === 'SICRO 2') return 'SICRO';
+  if (u.startsWith('SICRO')) return u.includes('3') ? 'SICRO3' : 'SICRO';
+  if (u.startsWith('AGETOP')) return 'AGETOP';
+  if (u.startsWith('SIURB')) return 'SIURB';
+  // Aceita direto se está no enum
+  if (FONTES_VALIDAS.has(u)) return u;
+  // Fallback defensivo: bancos desconhecidos viram OUTRA pro insert
+  // não quebrar. Edge Function depois loga warning específico no
+  // cadastro pra o usuário ver no painel.
+  return 'OUTRA';
+}
+
 export async function importarExtracaoManual(
   licitacaoId: string,
   jsonText: string,
@@ -324,17 +354,10 @@ export async function importarExtracaoManual(
   const cabecalho = (parsed.cabecalho ?? {}) as Record<string, unknown>;
   const bases = Array.isArray(cabecalho.bases_utilizadas)
     ? (cabecalho.bases_utilizadas as string[])
-        .map((b) => {
-          const u = String(b).toUpperCase().trim();
-          // Normaliza variantes que viram do LLM pra o enum fonte_referencia
-          if (u.startsWith('SICRO')) return 'SICRO';
-          if (u.startsWith('SINAPI')) return 'SINAPI';
-          if (u.startsWith('SEINFRA')) return 'SEINFRA';
-          if (u.startsWith('ORSE')) return 'ORSE';
-          if (u.startsWith('SBC')) return 'SBC';
-          return u;
-        })
-        .filter((b) => ['SINAPI', 'SICRO', 'SEINFRA', 'ORSE', 'SBC', 'PROPRIA', 'OUTRA'].includes(b))
+        .map((b) => normalizeFonte(b))
+        .filter((b): b is string => b != null && b !== 'PROPRIA')
+        // Remove duplicatas (SICRO + SICRO3 viram dois entries)
+        .filter((b, i, arr) => arr.indexOf(b) === i)
     : null;
   const ufRaw = cabecalho.uf;
   const uf = typeof ufRaw === 'string' ? ufRaw.toUpperCase().slice(0, 2) : null;
@@ -383,7 +406,7 @@ export async function importarExtracaoManual(
   const extracaoId = extr.id as string;
   console.log('[importar] extracao_ocr created', { ms: Date.now() - t0, extracaoId });
 
-  // Insere composicoes_extraidas
+  // Insere composicoes_extraidas — fonte normalizada pelo enum
   const compRows = parsed.itens.map((item, idx) => ({
     licitacao_id: licitacaoId,
     extracao_id: extracaoId,
@@ -392,7 +415,7 @@ export async function importarExtracaoManual(
     item_pai_codigo: item.pai,
     tipo_linha: item.tipo,
     codigo: item.codigo,
-    fonte: item.fonte,
+    fonte: normalizeFonte(item.fonte),
     descricao: item.descricao,
     unidade: item.unidade,
     quantidade: item.quantidade,
@@ -400,7 +423,9 @@ export async function importarExtracaoManual(
     preco_unitario_com_bdi: item.preco_unitario_com_bdi,
     preco_total: item.preco_total,
     ordem: idx,
-    metadata: {},
+    metadata: item.fonte && normalizeFonte(item.fonte) === 'OUTRA' && item.fonte.toUpperCase() !== 'OUTRA'
+      ? { fonte_original: item.fonte }
+      : {},
   }));
   const { data: persistidas, error: cErr } = await admin
     .from('composicoes_extraidas')
