@@ -17,7 +17,7 @@ interface Props {
   promptCopied: boolean;
   open: boolean;
   onClose: () => void;
-  onSuccess: (composicoes: number, subItens: number) => void;
+  onSuccess: (composicoes: number, subItens: number, jsonReparado?: boolean) => void;
 }
 
 const SOURCE_TITLE: Record<Props['source'], string> = {
@@ -90,7 +90,7 @@ export function ImportJsonModal({
       if (r?.error) {
         setError(r.error);
       } else {
-        onSuccess(r.composicoes_inseridas ?? 0, r.sub_itens_inseridos ?? 0);
+        onSuccess(r.composicoes_inseridas ?? 0, r.sub_itens_inseridos ?? 0, r.json_reparado);
         setJsonText('');
         setUploadedName(null);
         onClose();

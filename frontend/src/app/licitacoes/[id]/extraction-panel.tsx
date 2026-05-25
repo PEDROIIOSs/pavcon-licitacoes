@@ -56,7 +56,7 @@ export function ExtractionPanel({
   const [actionError, setActionError] = useState<string | null>(null);
   const [importModal, setImportModal] = useState<null | 'notebooklm' | 'claude_code'>(null);
   const [promptCopied, setPromptCopied] = useState(false);
-  const [importResult, setImportResult] = useState<{ composicoes: number; subItens: number } | null>(null);
+  const [importResult, setImportResult] = useState<{ composicoes: number; subItens: number; jsonReparado?: boolean } | null>(null);
   const [cadastroResult, setCadastroResult] = useState<{
     grupo_descricao?: string;
     composicoes_criadas?: number;
@@ -247,9 +247,17 @@ export function ExtractionPanel({
       )}
 
       {importResult && (
-        <div className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-800">
-          ✓ JSON importado: <strong>{importResult.composicoes}</strong> composições e{' '}
+        <div className={`rounded-md p-3 text-sm ${importResult.jsonReparado ? 'bg-amber-50 text-amber-900' : 'bg-emerald-50 text-emerald-800'}`}>
+          {importResult.jsonReparado ? '⚠ JSON estava truncado' : '✓ JSON importado'}:{' '}
+          <strong>{importResult.composicoes}</strong> composições e{' '}
           <strong>{importResult.subItens}</strong> sub-itens inseridos.
+          {importResult.jsonReparado && (
+            <p className="mt-1 text-xs">
+              O LLM cortou a resposta no meio do JSON. Conseguimos recuperar até o último item válido,
+              mas <strong>itens do final podem ter sido perdidos</strong>. Conferir a tabela do edital
+              vs a contagem acima — se faltar item, peça pra o LLM continuar de onde parou e re-importe.
+            </p>
+          )}
         </div>
       )}
 
@@ -263,7 +271,7 @@ export function ExtractionPanel({
           setImportModal(null);
           setPromptCopied(false);
         }}
-        onSuccess={(c, s) => setImportResult({ composicoes: c, subItens: s })}
+        onSuccess={(c, s, jsonReparado) => setImportResult({ composicoes: c, subItens: s, jsonReparado })}
       />
 
       {isExtracting && (

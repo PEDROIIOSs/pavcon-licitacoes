@@ -174,6 +174,9 @@ export async function approveExtraction(
 interface ImportarManualResult extends ActionResult {
   composicoes_inseridas?: number;
   sub_itens_inseridos?: number;
+  /** True quando o JSON do LLM veio truncado e foi reparado automaticamente.
+   * O orçamentista deve conferir se faltou item no fim do orçamento. */
+  json_reparado?: boolean;
 }
 
 const SOURCE_LABELS: Record<string, { provider: 'gemini' | 'anthropic' | 'openai' | 'voyage' | 'orcafascio'; model: string }> = {
@@ -239,6 +242,65 @@ function stripCodeFences(s: string): string {
   return m ? m[1].trim() : s.trim();
 }
 
+/**
+ * Tenta reparar JSON truncado (típico em respostas de LLM cortadas no meio).
+ * Estratégia: localiza o último `}` válido dentro do array `itens` e trunca
+ * tudo depois disso, fechando o array e o objeto raiz manualmente.
+ *
+ * Retorna { parsed, recuperados, descartados } ou null se nem isso funcionar.
+ */
+function tryParseTruncatedJSON(raw: string): {
+  parsed: unknown;
+  recuperados: number;
+  descartados: 'parcial' | null;
+} | null {
+  // Localiza início do array itens
+  const itensStart = raw.search(/"itens"\s*:\s*\[/);
+  if (itensStart < 0) return null;
+  const arrayOpen = raw.indexOf('[', itensStart);
+  if (arrayOpen < 0) return null;
+
+  // Caminha pelo array contando objetos top-level. Quando encontrar EOF
+  // ou char inválido, trunca depois do último `}` que fechou um objeto
+  // top-level (depth voltou a 0) e fecha o array + objeto raiz.
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  let lastValidObjectEnd = -1; // posição depois do último `}` top-level válido
+
+  for (let i = arrayOpen + 1; i < raw.length; i++) {
+    const c = raw[i];
+    if (escape) { escape = false; continue; }
+    if (c === '\\') { escape = true; continue; }
+    if (c === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (c === '{') depth++;
+    else if (c === '}') {
+      depth--;
+      if (depth === 0) lastValidObjectEnd = i + 1;
+    } else if (c === ']' && depth === 0) {
+      // Array fechou normalmente — JSON é válido, não precisa reparar
+      return null;
+    }
+  }
+
+  if (lastValidObjectEnd < 0) return null;
+
+  // Constrói JSON reparado: tudo até o último objeto + `]` + `}`
+  const reparado = raw.slice(0, lastValidObjectEnd) + ']}';
+  try {
+    const parsed = JSON.parse(reparado);
+    const itens = (parsed as { itens?: unknown[] }).itens ?? [];
+    return {
+      parsed,
+      recuperados: itens.length,
+      descartados: 'parcial',
+    };
+  } catch {
+    return null;
+  }
+}
+
 // Valores aceitos pelo enum `fonte_referencia` no Postgres. Manter
 // sincronizado com a migration de bases (SQL ALTER TYPE ADD VALUE).
 const FONTES_VALIDAS = new Set([
@@ -280,12 +342,32 @@ export async function importarExtracaoManual(
   console.log('[importar] auth', { ms: Date.now() - t0, userId: user?.id });
   if (!user) return { error: 'Não autenticado.' };
 
-  // Parse + validate
+  // Parse + validate (com recuperação resiliente pra JSON truncado pelo LLM)
   let parsed: ManualJson;
+  let jsonReparado = false;
   try {
     const cleaned = stripCodeFences(jsonText);
-    parsed = validateManualJson(JSON.parse(cleaned));
-    console.log('[importar] parsed', { ms: Date.now() - t0, itens: parsed.itens.length });
+    try {
+      parsed = validateManualJson(JSON.parse(cleaned));
+      console.log('[importar] parsed', { ms: Date.now() - t0, itens: parsed.itens.length });
+    } catch (parseErr) {
+      // Tenta reparar JSON truncado (LLM cortou a resposta no meio).
+      // Recupera o que dá, mantém warning explícito no retorno.
+      const recovery = tryParseTruncatedJSON(cleaned);
+      if (recovery) {
+        parsed = validateManualJson(recovery.parsed);
+        jsonReparado = true;
+        console.warn('[importar] JSON reparado', {
+          ms: Date.now() - t0,
+          itens: parsed.itens.length,
+          erro_original: parseErr instanceof Error ? parseErr.message : String(parseErr),
+        });
+      } else {
+        return {
+          error: `JSON inválido e irrecuperável: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}. Provavelmente o LLM (NotebookLM/Claude) cortou a resposta no meio — peça pra ele continuar de onde parou ou rode a extração novamente.`,
+        };
+      }
+    }
   } catch (e) {
     return { error: `JSON inválido: ${e instanceof Error ? e.message : String(e)}` };
   }
@@ -503,6 +585,7 @@ export async function importarExtracaoManual(
     ok: true,
     composicoes_inseridas: compRows.length,
     sub_itens_inseridos: subRows.length,
+    json_reparado: jsonReparado,
   };
   } catch (e) {
     console.error('[importar] uncaught', { ms: Date.now() - t0, err: e });
