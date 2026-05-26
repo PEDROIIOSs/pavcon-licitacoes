@@ -341,6 +341,13 @@ Deno.serve(async (req: Request) => {
           ...(meta.has_state ? { estado } : {}),
           data,
           exibir_relatorio: true,
+          // Truncar em 2 casas decimais (regra de licitação: nosso valor
+          // NUNCA pode ficar acima do edital — arredondamento half-up pode
+          // somar centavos por cima e desclassificar). O default do
+          // Orçafascio é "não arredondar" → preços com 4+ casas que somam
+          // valores levemente diferentes do edital. Truncar 2 casas bate
+          // exatamente com a planilha do órgão.
+          rounding_option: 2,
         };
       });
     if (bancos.length > 0) {

@@ -68,6 +68,29 @@ export default async function LicitacaoDetailPage({
     .eq('tipo_linha', 'servico')
     .order('ordem', { ascending: true });
 
+  // Sub-itens dessa licitação que estão na tabela de codes pendentes
+  // (registrados quando algum add-items falhou com 500 silencioso). Persiste
+  // entre re-cadastros, ao contrário do cadastro_resumo.warnings que é
+  // sobrescrito a cada retry.
+  const { data: subItensLicitacao } = await supabase
+    .from('composicao_propria_itens')
+    .select('codigo, fonte, descricao')
+    .in(
+      'composicao_extraida_id',
+      (servicosDetalhados ?? []).filter((s) => s.fonte === 'PROPRIA').map((s) => s.orcafascio_composition_id ?? '').filter(Boolean),
+    );
+  // Cross-reference com tabela de mapeamentos pendentes
+  const codesSet = new Set<string>(
+    (subItensLicitacao ?? []).map((s) => `${(s.fonte ?? '').toUpperCase()}/${s.codigo ?? ''}`),
+  );
+  const { data: mapeamentosTodos } = await supabase
+    .from('orcafascio_code_mappings')
+    .select('fonte_original, codigo_original, descricao, codigo_substituto')
+    .is('codigo_substituto', null);
+  const codesPendentes = (mapeamentosTodos ?? []).filter((m) =>
+    codesSet.has(`${(m.fonte_original ?? '').toUpperCase()}/${m.codigo_original ?? ''}`),
+  );
+
   let totalComBdi = 0;
   let totalSemBdi = 0;
   for (const l of linhasFinanceiras ?? []) {
@@ -272,6 +295,44 @@ export default async function LicitacaoDetailPage({
         {/* Painel de diagnóstico do cadastramento — só aparece quando já cadastrou
             (cadastro_resumo tem budget_url). Compara totais e mostra warnings
             específicos pro orçamentista revisar diretamente no Orçafascio. */}
+        {codesPendentes.length > 0 && (
+          <section className="rounded-lg border border-amber-300 bg-amber-50 p-6 text-amber-900">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-sm font-semibold">
+                  ⚠ {codesPendentes.length} código(s) descontinuado(s) nesta licitação
+                </h2>
+                <p className="mt-1 text-xs">
+                  Esses códigos (SINAPI/ORSE/etc) foram rejeitados pelo Orçafascio (provavelmente legacy
+                  que não existe mais na base atual). Os insumos correspondentes ficaram <strong>com preço R$ 0,00</strong>
+                  no orçamento. Mapeie cada um pro código atual equivalente — próximos editais aplicam a substituição
+                  automaticamente.
+                </p>
+              </div>
+              <Link
+                href="/dashboard/code-mappings"
+                className="rounded-md bg-amber-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-800"
+              >
+                Mapear códigos →
+              </Link>
+            </div>
+            <details className="mt-3">
+              <summary className="cursor-pointer text-xs font-medium">Ver lista ({codesPendentes.length})</summary>
+              <ul className="mt-2 space-y-1 text-[11px]">
+                {codesPendentes.slice(0, 20).map((c, i) => (
+                  <li key={i} className="border-l-2 border-amber-300 pl-2">
+                    <span className="font-mono">{c.fonte_original}/{c.codigo_original}</span> —{' '}
+                    {c.descricao ?? '(sem descrição)'}
+                  </li>
+                ))}
+                {codesPendentes.length > 20 && (
+                  <li className="text-amber-700">... e mais {codesPendentes.length - 20}</li>
+                )}
+              </ul>
+            </details>
+          </section>
+        )}
+
         <DiagnosticoCadastro
           servicos={(servicosDetalhados ?? []).map((s) => ({
             item_codigo: s.item_codigo,
