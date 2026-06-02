@@ -326,7 +326,13 @@ Deno.serve(async (req: Request) => {
     // ---- 4) Cria o budget ----------------------------------------------------
     // Codigo precisa ser único — adiciona suffix com data+hora pra evitar conflito
     // de unicidade no Orçafascio (caso o orçamentista crie múltiplos pra mesma obra).
-    const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    // Inclui segundos no stamp pra evitar colisão quando 2 retries acontecem
+    // no mesmo minuto. Bug observado em Batalha: dois POST /orc/orcamentos
+    // em 21:40:26 e 21:40:59 geravam o mesmo codigo "BATALHA 2026-06-02 21:40",
+    // Rails validava unicidade e redirecionava o segundo pra /orc/orcamentos/new
+    // (em vez do /orcamentos/<id>/new_passo_2 esperado), causando o erro
+    // "createBudget: não consegui extrair budget_id do redirect".
+    const stamp = new Date().toISOString().slice(0, 19).replace('T', ' ');
     const baseCod = (licitacao.municipio ?? 'OBRA').toUpperCase().slice(0, 30);
     const tituloPrefix = body.proposta?.titulo_prefix ?? (isProposta ? 'PROPOSTA - ' : '');
     const codigo = `${isProposta ? 'PROP ' : ''}${baseCod} ${stamp}`.slice(0, 50);

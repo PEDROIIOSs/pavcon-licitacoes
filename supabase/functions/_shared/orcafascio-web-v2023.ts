@@ -259,6 +259,17 @@ export async function createBudget(
   const loc = result.__redirect ?? '';
   const m = loc.match(/\/orc\/orcamentos\/([a-f0-9]{24})/);
   if (!m) {
+    // Caso especial: Rails redireciona pra /orc/orcamentos/new (sem id)
+    // quando o form falha alguma validação (geralmente código duplicado
+    // — orçamento com mesmo "codigo" já existe na empresa).
+    if (loc.endsWith('/orc/orcamentos/new') || loc.endsWith('/orcamentos')) {
+      throw new OrcafascioV2023Error(
+        422,
+        `createBudget: Orçafascio rejeitou o orçamento (provável código duplicado "${input.codigo}"). ` +
+          `Espere alguns segundos e tente novamente, ou apague no Orçafascio o orçamento com esse código antes de retry.`,
+        { redirect: loc, codigo: input.codigo },
+      );
+    }
     throw new OrcafascioV2023Error(
       0,
       'createBudget: não consegui extrair budget_id do redirect',
