@@ -421,11 +421,13 @@ Deno.serve(async (req: Request) => {
             .replace(/[^A-Z0-9_-]/g, '_')
             .replace(/_+/g, '_').replace(/^_|_$/g, '')
             .slice(0, 40);
-        const codigoBase = c.codigo && (c.codigo as string).trim()
-          ? sanitize(c.codigo as string)
-          : `COMPOSIC_${sanitize(c.item_codigo as string)}`;
-        const itemSuffix = sanitize(c.item_codigo as string).slice(0, 8);
-        const mybaseCode = (codigoBase + (codigoBase.endsWith(itemSuffix) ? '' : `_${itemSuffix}`)).slice(0, 50);
+        // Code sem sufixo (espelha cadastrar-edital): segue o nome do edital
+        // pra orçamentista reconhecer "COMPOSIÇÃO 09" em vez de "COMPOSICAO_09_5_2_1".
+        const mybaseCode = (
+          c.codigo && (c.codigo as string).trim()
+            ? sanitize(c.codigo as string)
+            : `COMPOSIC_${sanitize(c.item_codigo as string)}`
+        ).slice(0, 50);
         const code = isPropria ? mybaseCode : (c.codigo ?? '');
         if (!code) continue;
         if (isPropria && !c.orcafascio_composition_id) continue;

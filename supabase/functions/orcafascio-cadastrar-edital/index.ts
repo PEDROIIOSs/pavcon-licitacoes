@@ -521,13 +521,23 @@ Deno.serve(async (req: Request) => {
           .replace(/^_|_$/g, '')
           .slice(0, 40);
 
-      const codigoBase = comp.codigo && comp.codigo.trim()
-        ? sanitize(comp.codigo)
-        : `COMPOSIC_${sanitize(comp.item_codigo)}`;
-      // Sufixo item_codigo curto garante unicidade quando 2 composições do
-      // edital usam o mesmo código próprio (ex: "REG1" em capítulos diferentes)
-      const itemSuffix = sanitize(comp.item_codigo).slice(0, 8);
-      const codigo = (codigoBase + (codigoBase.endsWith(itemSuffix) ? '' : `_${itemSuffix}`)).slice(0, 50);
+      // Code da composição no MyBase: seguir o nome do edital sem prefixos.
+      // Feedback do orçamentista (Estádio Batalha): "evitar muitas variações no
+      // nome, seguir sempre o código usado pelo órgão — ex: COMPOSIÇÃO 09".
+      // Estratégia:
+      //   - codigo do edital existe → usa só ele sanitizado ("COMPOSIÇÃO 09" → "COMPOSICAO_09")
+      //   - codigo do edital ausente → fallback pra "COMPOSIC_<item_codigo>"
+      //
+      // RISCO conhecido: 2 editais diferentes com mesmo `codigo` (ex: ambos
+      // têm "ADM_LOCAL") podem colidir no MyBase via findCompositionByCode.
+      // Mitigação: `second_code` carrega LICITACAO_<id_short>_<item> pra
+      // rastreabilidade. Se colisão atrapalhar na prática, adicionar sufixo
+      // diferenciador depois.
+      const codigo = (
+        comp.codigo && comp.codigo.trim()
+          ? sanitize(comp.codigo)
+          : `COMPOSIC_${sanitize(comp.item_codigo)}`
+      ).slice(0, 50);
       const descricao = (comp.descricao ?? 'Composição própria do edital').slice(0, 500);
       const unidade = (comp.unidade ?? 'Un').slice(0, 20);
 
@@ -611,6 +621,18 @@ Deno.serve(async (req: Request) => {
       // substituímos o codigo original pelo code do resource e marcamos
       // is_resource: true.
       const subs = subItensByCompId.get(comp.id) ?? [];
+      // Composição PROPRIA sem detalhamento no JSON (ex: planilha anexa não
+      // veio na extração). Mantemos a composição criada no MyBase pra
+      // preservar a estrutura do orçamento (código/descrição/unidade), mas
+      // logamos warning pro orçamentista preencher manualmente depois.
+      // Feedback do orçamentista (Batalha): "se em algum caso uma composição
+      // própria não for encontrada nos anexos, criar a mesma no orçamento e
+      // deixar em branco". É exatamente isso.
+      if (subs.length === 0) {
+        warnings.push(
+          `Composição "${codigo}" (${(comp.descricao ?? '').slice(0, 60)}) criada em branco — não havia detalhamento no JSON do edital. Preencha manualmente os insumos/sub-composições no Orçafascio.`,
+        );
+      }
       // LIMITAÇÃO conhecida da API pública do Orçafascio: insumos do MyBase
       // (resources cadastrados pela empresa) NÃO podem ser sub-itens de outra
       // composição MyBase via /add-items (sempre devolve 500). Por isso os
