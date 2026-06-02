@@ -3,6 +3,7 @@ import { formatBRL, formatDate, statusColor, statusLabel } from '@/lib/utils';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ChecklistPreCadastro } from './checklist-pre-cadastro';
+import { AgentePanel } from './agente-panel';
 import { DiagnosticoCadastro } from './diagnostico-cadastro';
 import { ExtractionPanel } from './extraction-panel';
 import { StatusActions } from './status-actions';
@@ -243,6 +244,8 @@ export default async function LicitacaoDetailPage({
             orcafascio_proposta_budget_id: licitacao.orcafascio_proposta_budget_id,
           }}
         />
+
+        <AgentePanel licitacaoId={licitacao.id} diagnosticosIniciais={[]} />
 
         <StatusActions licitacaoId={licitacao.id} status={licitacao.status} />
 
