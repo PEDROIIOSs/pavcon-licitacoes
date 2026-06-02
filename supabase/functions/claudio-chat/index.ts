@@ -312,21 +312,30 @@ Deno.serve(async (req: Request) => {
   }
 
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
-  if (!apiKey) {
+  const proxyUrl = Deno.env.get('CLAUDIO_PROXY_URL');
+  const proxyToken = Deno.env.get('CLAUDIO_PROXY_TOKEN') ?? '';
+
+  // 3 modos de operação, em ordem de preferência:
+  //   1. Proxy local (Claude Code via subscription Max do orçamentista)
+  //   2. API Anthropic direta (sk-ant-... no Vault)
+  //   3. Stub mode (nenhum dos 2 configurado)
+  if (!apiKey && !proxyUrl) {
     return jsonResponse({
       ok: false,
       stub: true,
       resposta:
         'Oi, sou o Cláudio! 🤖\n\n' +
-        'Ainda não fui plugado com a Claude API — o admin precisa configurar ' +
-        '`ANTHROPIC_API_KEY` no Supabase. Enquanto isso, use o botão "🤖 Cláudio resolver agora" ' +
-        'nos diagnósticos detectados pra eu aplicar auto-fixes determinísticos.',
+        'Ainda não fui plugado com a Claude API. O admin precisa configurar:\n' +
+        '• `ANTHROPIC_API_KEY` (API direta), OU\n' +
+        '• `CLAUDIO_PROXY_URL` (proxy local com Claude Code Max)\n\n' +
+        'Enquanto isso, use o botão "🤖 Cláudio resolver agora" nos diagnósticos detectados ' +
+        'pra eu aplicar auto-fixes determinísticos.',
     });
   }
 
   const admin = getServiceRoleClient();
 
-  // Anexa contexto inicial à primeira mensagem do user como bloco invisível
+  // Anexa contexto inicial à primeira mensagem do user
   const contextoStr = body.contexto
     ? `\n\n<contexto_da_licitacao>${JSON.stringify(body.contexto)}</contexto_da_licitacao>`
     : '';
@@ -339,10 +348,45 @@ Deno.serve(async (req: Request) => {
   }));
 
   const acoesExecutadas: Array<{ tool: string; input: unknown; result: unknown }> = [];
+
+  // Despacha pro modo configurado
+  if (proxyUrl) {
+    return await chatViaProxy({
+      proxyUrl,
+      proxyToken,
+      messages,
+      licitacaoId: body.licitacao_id!,
+      userId,
+      admin,
+      acoesExecutadas,
+    });
+  }
+
+  return await chatViaAnthropicAPI({
+    apiKey: apiKey!,
+    messages,
+    licitacaoId: body.licitacao_id!,
+    userId,
+    admin,
+    acoesExecutadas,
+  });
+});
+
+// =============================================================================
+// Modo 1: API Anthropic direta com tool use estruturado
+// =============================================================================
+async function chatViaAnthropicAPI(args: {
+  apiKey: string;
+  messages: Array<{ role: string; content: unknown }>;
+  licitacaoId: string;
+  userId: string;
+  admin: ReturnType<typeof getServiceRoleClient>;
+  acoesExecutadas: Array<{ tool: string; input: unknown; result: unknown }>;
+}): Promise<Response> {
+  const { apiKey, messages, licitacaoId, userId, admin, acoesExecutadas } = args;
   let tokensIn = 0;
   let tokensOut = 0;
 
-  // Tool use loop
   for (let loop = 0; loop < MAX_TOOL_LOOPS; loop++) {
     const resp = await fetch(ANTHROPIC_API, {
       method: 'POST',
@@ -359,21 +403,16 @@ Deno.serve(async (req: Request) => {
         messages,
       }),
     });
-
     if (!resp.ok) {
       const errText = await resp.text();
       return errorResponse(502, `Claude API ${resp.status}: ${errText.slice(0, 400)}`);
     }
-
     const data = await resp.json();
     tokensIn += data.usage?.input_tokens ?? 0;
     tokensOut += data.usage?.output_tokens ?? 0;
-
-    // Adiciona resposta do assistente ao histórico
     messages.push({ role: 'assistant', content: data.content });
 
     if (data.stop_reason !== 'tool_use') {
-      // Conversa terminou — extrai texto
       const text = (data.content as Array<{ type: string; text?: string }>)
         .filter((b) => b.type === 'text')
         .map((b) => b.text ?? '')
@@ -386,49 +425,151 @@ Deno.serve(async (req: Request) => {
         tokens_in: tokensIn,
         tokens_out: tokensOut,
         loops: loop + 1,
+        via: 'anthropic-api',
       });
     }
 
-    // Executa cada tool_use e prepara tool_result pra próxima rodada
     const toolUses = (data.content as Array<{ type: string; id?: string; name?: string; input?: Record<string, unknown> }>)
       .filter((b) => b.type === 'tool_use');
-
     const toolResults: Array<{ type: 'tool_result'; tool_use_id: string; content: string }> = [];
     for (const tu of toolUses) {
       try {
-        const result = await executarTool(tu.name!, tu.input ?? {}, {
-          licitacaoId: body.licitacao_id!,
-          userId,
-          admin,
-        });
+        const result = await executarTool(tu.name!, tu.input ?? {}, { licitacaoId, userId, admin });
         acoesExecutadas.push({ tool: tu.name!, input: tu.input, result });
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: tu.id!,
-          content: JSON.stringify(result),
-        });
+        toolResults.push({ type: 'tool_result', tool_use_id: tu.id!, content: JSON.stringify(result) });
       } catch (e) {
         const erro = e instanceof Error ? e.message : String(e);
         acoesExecutadas.push({ tool: tu.name!, input: tu.input, result: { erro } });
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: tu.id!,
-          content: JSON.stringify({ ok: false, erro }),
-        });
+        toolResults.push({ type: 'tool_result', tool_use_id: tu.id!, content: JSON.stringify({ ok: false, erro }) });
       }
     }
-
-    // Próxima rodada: adiciona tool_results como msg do user
     messages.push({ role: 'user', content: toolResults });
   }
-
-  // Excedeu max loops
   return jsonResponse({
     ok: true,
-    resposta: '(Excedi o limite de iterações. Tente reformular a pergunta.)',
+    resposta: '(Excedi o limite de iterações. Tente reformular.)',
     acoes_executadas: acoesExecutadas,
     tokens_in: tokensIn,
     tokens_out: tokensOut,
     loops: MAX_TOOL_LOOPS,
+    via: 'anthropic-api',
   });
-});
+}
+
+// =============================================================================
+// Modo 2: Proxy local via Claude Code CLI (subscription Max do orçamentista)
+// =============================================================================
+// O CLI não suporta tool use estruturado — Claude responde texto puro.
+// Estratégia: instruimos no system prompt o uso de XML tags pra tool calls,
+// parseamos as tags na resposta, executamos, e mandamos resultado de volta
+// pro Claude formatar a resposta final.
+// =============================================================================
+async function chatViaProxy(args: {
+  proxyUrl: string;
+  proxyToken: string;
+  messages: Array<{ role: string; content: unknown }>;
+  licitacaoId: string;
+  userId: string;
+  admin: ReturnType<typeof getServiceRoleClient>;
+  acoesExecutadas: Array<{ tool: string; input: unknown; result: unknown }>;
+}): Promise<Response> {
+  const { proxyUrl, proxyToken, messages, licitacaoId, userId, admin, acoesExecutadas } = args;
+
+  // System prompt aumentado pra instruir uso de XML tags pra tool calls
+  const SYSTEM_COM_TOOLS = SYSTEM_PROMPT + `
+
+# Tools disponíveis (via XML tags)
+
+Como você está rodando via Claude Code CLI (que não tem function calling estruturado),
+chame ferramentas usando XML tags. Eu vou parsear e executar.
+
+Formato:
+<tool_call>
+{"name": "nome_da_tool", "input": {...}}
+</tool_call>
+
+Ferramentas disponíveis:
+${TOOLS.map((t) => `- **${t.name}**: ${t.description}\n  Input schema: ${JSON.stringify(t.input_schema.properties)}`).join('\n')}
+
+Regras:
+1. Pra usar uma tool, escreva SÓ a tag <tool_call>...</tool_call> com JSON dentro. Eu executo e mando o resultado na próxima mensagem.
+2. Quando tiver tudo que precisa, responda em texto natural sem tags.
+3. Sempre uma tool por vez (não múltiplas tags numa só resposta).`;
+
+  for (let loop = 0; loop < MAX_TOOL_LOOPS; loop++) {
+    const resp = await fetch(`${proxyUrl}/chat`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(proxyToken ? { authorization: `Bearer ${proxyToken}` } : {}),
+      },
+      body: JSON.stringify({
+        system: SYSTEM_COM_TOOLS,
+        messages: messages.map((m) => ({
+          role: m.role,
+          content: typeof m.content === 'string'
+            ? m.content
+            : JSON.stringify(m.content),
+        })),
+      }),
+    });
+    if (!resp.ok) {
+      const errText = await resp.text();
+      return errorResponse(502, `Proxy Cláudio ${resp.status}: ${errText.slice(0, 400)}`);
+    }
+    const data = await resp.json();
+    const texto: string = data.resposta ?? '';
+    messages.push({ role: 'assistant', content: texto });
+
+    // Parseia <tool_call>...</tool_call>
+    const match = texto.match(/<tool_call>\s*([\s\S]+?)\s*<\/tool_call>/);
+    if (!match) {
+      // Sem tool call — resposta final
+      return jsonResponse({
+        ok: true,
+        resposta: texto.trim(),
+        acoes_executadas: acoesExecutadas,
+        loops: loop + 1,
+        via: 'proxy-claude-code',
+      });
+    }
+
+    // Executa a tool
+    let toolCall: { name?: string; input?: Record<string, unknown> };
+    try {
+      toolCall = JSON.parse(match[1]);
+    } catch (e) {
+      messages.push({
+        role: 'user',
+        content: `JSON inválido na tag tool_call: ${e instanceof Error ? e.message : String(e)}. Tenta de novo com JSON válido.`,
+      });
+      continue;
+    }
+    if (!toolCall.name) {
+      messages.push({ role: 'user', content: 'Faltou "name" na tool_call.' });
+      continue;
+    }
+    try {
+      const result = await executarTool(toolCall.name, toolCall.input ?? {}, { licitacaoId, userId, admin });
+      acoesExecutadas.push({ tool: toolCall.name, input: toolCall.input, result });
+      messages.push({
+        role: 'user',
+        content: `<tool_result name="${toolCall.name}">${JSON.stringify(result)}</tool_result>`,
+      });
+    } catch (e) {
+      const erro = e instanceof Error ? e.message : String(e);
+      acoesExecutadas.push({ tool: toolCall.name, input: toolCall.input, result: { erro } });
+      messages.push({
+        role: 'user',
+        content: `<tool_result name="${toolCall.name}" erro="true">${JSON.stringify({ ok: false, erro })}</tool_result>`,
+      });
+    }
+  }
+  return jsonResponse({
+    ok: true,
+    resposta: '(Excedi o limite de iterações via proxy.)',
+    acoes_executadas: acoesExecutadas,
+    loops: MAX_TOOL_LOOPS,
+    via: 'proxy-claude-code',
+  });
+}
