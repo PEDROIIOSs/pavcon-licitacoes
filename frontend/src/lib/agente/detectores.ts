@@ -249,6 +249,69 @@ function detectarPropriaSemCodigo(ctx: ContextoAnalise): Diagnostico[] {
 }
 
 // =============================================================================
+// Detector 8: items reclassificados (SINAPI -ADAP virou PROPRIA)
+// =============================================================================
+function detectarReclassificados(ctx: ContextoAnalise): Diagnostico[] {
+  // Esta detecção precisa que `servicos` tenha metadata exposto. Como não
+  // temos isso no contexto atual, deixa pra extensão futura. Por enquanto,
+  // detectamos códigos com padrões suspeitos diretamente.
+  const suspeitos = ctx.servicos.filter((s) => {
+    if (!s.codigo) return false;
+    const c = s.codigo.toUpperCase();
+    if (s.fonte === 'PROPRIA') return false;
+    return (
+      /[\s-]ADAPT?(?:AD[OA])?\s*$|^ADAPTAD[OA]\s|\sADAP\s|-A$/i.test(c) ||
+      /^COMPOSI[CÇ][ÃA]O\s*[\d_-]+/i.test(c)
+    );
+  });
+  if (suspeitos.length === 0) return [];
+  return [{
+    tipo: 'codes_adaptados_nao_reclassificados',
+    severidade: 'erro',
+    titulo: `${suspeitos.length} código(s) adaptado(s) marcado(s) como SINAPI/ORSE`,
+    mensagem:
+      'Esses items têm sufixo "-ADAP", "-A", "adaptado" ou texto literal "COMPOSIÇÃO XX" — ' +
+      'são adaptações do órgão, não codes reais do banco público. Vão zerar no orçamento.',
+    sugestao:
+      'A normalização nova converte esses items pra PROPRIA automaticamente — ' +
+      'volte pra revisão do JSON ("Voltar etapa") e re-importe pra aplicar o fix.',
+    contexto: {
+      exemplos: suspeitos.slice(0, 5).map((s) => ({
+        item: s.item_codigo,
+        fonte: s.fonte,
+        codigo: s.codigo,
+        descricao: s.descricao.slice(0, 60),
+      })),
+    },
+  }];
+}
+
+// =============================================================================
+// Detector 9: serviços sem fonte/código (planilha anexa faltando)
+// =============================================================================
+function detectarServicosSemFonte(ctx: ContextoAnalise): Diagnostico[] {
+  const semFonte = ctx.servicos.filter((s) => !s.fonte || !s.codigo);
+  if (semFonte.length === 0) return [];
+  return [{
+    tipo: 'servicos_sem_fonte',
+    severidade: 'erro',
+    titulo: `${semFonte.length} serviço(s) sem fonte/código`,
+    mensagem:
+      'Esses serviços não têm referência de banco — provavelmente são itens agregadores ' +
+      'que tinham detalhamento em planilha anexa que o LLM não capturou.',
+    sugestao:
+      'Re-extraia o JSON pedindo pro LLM incluir planilhas anexas. ' +
+      'Ou edite manualmente o JSON na revisão e adicione a fonte+código apropriados.',
+    contexto: {
+      exemplos: semFonte.slice(0, 5).map((s) => ({
+        item: s.item_codigo,
+        descricao: s.descricao.slice(0, 60),
+      })),
+    },
+  }];
+}
+
+// =============================================================================
 // Orchestrator
 // =============================================================================
 export const DETECTORES: Array<(ctx: ContextoAnalise) => Diagnostico[]> = [
@@ -259,6 +322,8 @@ export const DETECTORES: Array<(ctx: ContextoAnalise) => Diagnostico[]> = [
   detectarCadastroIncompleto,
   detectarOrcamentoGrande,
   detectarPropriaSemCodigo,
+  detectarReclassificados,
+  detectarServicosSemFonte,
 ];
 
 export function rodarAnalise(ctx: ContextoAnalise): Diagnostico[] {

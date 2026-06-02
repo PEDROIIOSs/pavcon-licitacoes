@@ -92,14 +92,45 @@ export function AgentePanel({ licitacaoId, diagnosticosIniciais }: Props) {
   return (
     <section className="rounded-lg border-2 border-purple-200 bg-gradient-to-br from-purple-50 to-white p-6">
       <div className="flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-sm font-semibold text-purple-900">
-            🤖 Agente de Suporte
-          </h2>
-          <p className="mt-0.5 text-xs text-purple-700">
-            Analisa a licitação automaticamente, identifica problemas conhecidos e sugere correções.
-            Aprende quando você marca como resolvido.
-          </p>
+        <div className="flex items-start gap-3">
+          {/* Avatar do Cláudio (SVG inline pra não depender de imagem externa) */}
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-purple-600 shadow-md">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-7 w-7 text-white"
+            >
+              {/* Antena */}
+              <path d="M12 2v3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              <circle cx="12" cy="2" r="1" fill="currentColor" />
+              {/* Cabeça do robô */}
+              <rect
+                x="5" y="6" width="14" height="11" rx="2.5"
+                stroke="currentColor" strokeWidth="2" fill="none"
+              />
+              {/* Olhos */}
+              <circle cx="9" cy="11" r="1.3" fill="currentColor" />
+              <circle cx="15" cy="11" r="1.3" fill="currentColor" />
+              {/* Boca */}
+              <path d="M9 14.5h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              {/* Pescoço/base */}
+              <path d="M8 17v2M16 17v2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              <rect
+                x="7" y="19" width="10" height="3" rx="1"
+                stroke="currentColor" strokeWidth="2" fill="none"
+              />
+            </svg>
+          </div>
+          <div>
+            <h2 className="text-sm font-semibold text-purple-900">
+              Cláudio <span className="text-xs font-normal text-purple-700">— assistente de orçamentos</span>
+            </h2>
+            <p className="mt-0.5 text-xs text-purple-700">
+              Analisa a licitação automaticamente, identifica problemas conhecidos e sugere correções.
+              Aprende quando você marca como resolvido.
+            </p>
+          </div>
         </div>
         <button
           onClick={handleAnalisar}
@@ -116,7 +147,7 @@ export function AgentePanel({ licitacaoId, diagnosticosIniciais }: Props) {
 
       {diagnosticos.length === 0 && !analisando && (
         <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
-          ✓ Nenhum problema detectado. Boa pra cadastrar.
+          ✓ Tudo certo por aqui. O Cláudio não detectou problemas pendentes.
         </div>
       )}
 

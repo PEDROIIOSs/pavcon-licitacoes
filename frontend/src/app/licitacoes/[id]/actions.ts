@@ -82,26 +82,41 @@ export async function saveExtractionEdits(
     .eq('extracao_id', extracaoId);
   if (delErr) return { error: `Falha ao limpar composições antigas: ${delErr.message}` };
 
-  const composicoesRows = jsonCorrigido.itens.map((item, idx) => ({
-    licitacao_id: licitacaoId,
-    extracao_id: extracaoId,
-    item_codigo: item.item_codigo,
-    item_nivel: item.nivel,
-    item_pai_codigo: item.pai,
-    tipo_linha: item.tipo,
-    codigo: item.codigo,
-    fonte: normalizeFonte(item.fonte),
-    descricao: item.descricao,
-    unidade: item.unidade,
-    quantidade: item.quantidade,
-    preco_unitario_sem_bdi: item.preco_unitario_sem_bdi,
-    preco_unitario_com_bdi: item.preco_unitario_com_bdi,
-    preco_total: item.preco_total,
-    ordem: idx,
-    metadata: item.fonte && normalizeFonte(item.fonte) === 'OUTRA' && item.fonte.toUpperCase() !== 'OUTRA'
-      ? { fonte_original: item.fonte }
-      : {},
-  }));
+  const composicoesRows = jsonCorrigido.itens.map((item, idx) => {
+    const fonteNormalizada = normalizeFonte(item.fonte);
+    const adaptCheck = detectarCodigoAdaptado(fonteNormalizada, item.codigo);
+    const fonteFinal = adaptCheck.reclassificarComoPropria ? 'PROPRIA' : fonteNormalizada;
+    let metadata: Record<string, unknown> = {};
+    if (item.fonte && fonteNormalizada === 'OUTRA' && item.fonte.toUpperCase() !== 'OUTRA') {
+      metadata = { fonte_original: item.fonte };
+    }
+    if (adaptCheck.reclassificarComoPropria) {
+      metadata = {
+        ...metadata,
+        fonte_original: item.fonte ?? null,
+        codigo_original: item.codigo ?? null,
+        reclassificada_motivo: adaptCheck.motivo,
+      };
+    }
+    return {
+      licitacao_id: licitacaoId,
+      extracao_id: extracaoId,
+      item_codigo: item.item_codigo,
+      item_nivel: item.nivel,
+      item_pai_codigo: item.pai,
+      tipo_linha: item.tipo,
+      codigo: item.codigo,
+      fonte: fonteFinal,
+      descricao: item.descricao,
+      unidade: item.unidade,
+      quantidade: item.quantidade,
+      preco_unitario_sem_bdi: item.preco_unitario_sem_bdi,
+      preco_unitario_com_bdi: item.preco_unitario_com_bdi,
+      preco_total: item.preco_total,
+      ordem: idx,
+      metadata,
+    };
+  });
 
   if (composicoesRows.length > 0) {
     const { error: insErr } = await admin
@@ -240,6 +255,50 @@ function validateManualJson(raw: unknown): ManualJson {
 function stripCodeFences(s: string): string {
   const m = s.match(/```(?:json)?\s*([\s\S]*?)```/);
   return m ? m[1].trim() : s.trim();
+}
+
+/**
+ * Detecta items que foram marcados como SINAPI/ORSE/etc mas com código
+ * sinalizando que são ADAPTAÇÕES do edital (variação local da composição
+ * oficial). Reclassifica como PROPRIA pra que o cadastrar-edital crie
+ * uma composição própria no MyBase em vez de tentar resolver o code
+ * inexistente no banco público (que zera o preço).
+ *
+ * Padrões detectados (case-insensitive):
+ *   - Sufixos: "-A", "-ADAP", "-ADAPT", "-ADAPTADA", "-ADAPTADO",
+ *     " - ADAP", "ADAP " no meio
+ *   - Texto literal "COMPOSIÇÃO XX" / "COMPOSICAO XX" como código
+ *
+ * Retorna { fonte, codigo_original } com fonte_original preservado em
+ * metadata pra rastreabilidade.
+ */
+function detectarCodigoAdaptado(
+  fonte: string | null,
+  codigo: string | null,
+): { reclassificarComoPropria: boolean; motivo?: string } {
+  if (!codigo || !fonte) return { reclassificarComoPropria: false };
+  const f = fonte.toUpperCase();
+  if (f === 'PROPRIA' || f === 'OUTRA') return { reclassificarComoPropria: false };
+
+  const c = codigo.toUpperCase().trim();
+
+  // Texto literal "COMPOSIÇÃO 07" ou "COMPOSICAO 07" como código
+  if (/^COMPOSI[CÇ][ÃA]O\s*[\d_-]+/i.test(c)) {
+    return {
+      reclassificarComoPropria: true,
+      motivo: `código "${codigo}" é texto literal (não é código ${fonte}) — provável composição própria do edital`,
+    };
+  }
+
+  // Sufixos de adaptação: -ADAP, -ADAPT, -ADAPTADA, -A no final
+  if (/[\s-]ADAPT?(?:AD[OA])?\s*$|^ADAPTAD[OA]\s|\sADAP\s|\s-\s*A\s*$|-A$|-ADAP$/i.test(c)) {
+    return {
+      reclassificarComoPropria: true,
+      motivo: `código "${codigo}" tem sufixo de adaptação — composição ${fonte} foi modificada pelo órgão`,
+    };
+  }
+
+  return { reclassificarComoPropria: false };
 }
 
 /**
@@ -488,27 +547,54 @@ export async function importarExtracaoManual(
   const extracaoId = extr.id as string;
   console.log('[importar] extracao_ocr created', { ms: Date.now() - t0, extracaoId });
 
-  // Insere composicoes_extraidas — fonte normalizada pelo enum
-  const compRows = parsed.itens.map((item, idx) => ({
-    licitacao_id: licitacaoId,
-    extracao_id: extracaoId,
-    item_codigo: item.item_codigo,
-    item_nivel: item.nivel,
-    item_pai_codigo: item.pai,
-    tipo_linha: item.tipo,
-    codigo: item.codigo,
-    fonte: normalizeFonte(item.fonte),
-    descricao: item.descricao,
-    unidade: item.unidade,
-    quantidade: item.quantidade,
-    preco_unitario_sem_bdi: item.preco_unitario_sem_bdi,
-    preco_unitario_com_bdi: item.preco_unitario_com_bdi,
-    preco_total: item.preco_total,
-    ordem: idx,
-    metadata: item.fonte && normalizeFonte(item.fonte) === 'OUTRA' && item.fonte.toUpperCase() !== 'OUTRA'
-      ? { fonte_original: item.fonte }
-      : {},
-  }));
+  // Insere composicoes_extraidas — fonte normalizada pelo enum + detecção
+  // automática de códigos adaptados (SINAPI/ORSE com sufixo "-ADAP", "-A",
+  // "adaptado" OU texto literal "COMPOSIÇÃO XX"): reclassifica como PROPRIA
+  // pra criar uma composição própria no MyBase em vez de tentar resolver
+  // um code inexistente que zera o preço.
+  let reclassificadas = 0;
+  const compRows = parsed.itens.map((item, idx) => {
+    const fonteNormalizada = normalizeFonte(item.fonte);
+    const adaptCheck = detectarCodigoAdaptado(fonteNormalizada, item.codigo);
+    const fonteFinal = adaptCheck.reclassificarComoPropria ? 'PROPRIA' : fonteNormalizada;
+    if (adaptCheck.reclassificarComoPropria) reclassificadas++;
+
+    // Metadata: rastreabilidade pra fonte original quando reclassificamos
+    let metadata: Record<string, unknown> = {};
+    if (item.fonte && fonteNormalizada === 'OUTRA' && item.fonte.toUpperCase() !== 'OUTRA') {
+      metadata = { fonte_original: item.fonte };
+    }
+    if (adaptCheck.reclassificarComoPropria) {
+      metadata = {
+        ...metadata,
+        fonte_original: item.fonte ?? null,
+        codigo_original: item.codigo ?? null,
+        reclassificada_motivo: adaptCheck.motivo,
+      };
+    }
+
+    return {
+      licitacao_id: licitacaoId,
+      extracao_id: extracaoId,
+      item_codigo: item.item_codigo,
+      item_nivel: item.nivel,
+      item_pai_codigo: item.pai,
+      tipo_linha: item.tipo,
+      codigo: item.codigo,
+      fonte: fonteFinal,
+      descricao: item.descricao,
+      unidade: item.unidade,
+      quantidade: item.quantidade,
+      preco_unitario_sem_bdi: item.preco_unitario_sem_bdi,
+      preco_unitario_com_bdi: item.preco_unitario_com_bdi,
+      preco_total: item.preco_total,
+      ordem: idx,
+      metadata,
+    };
+  });
+  if (reclassificadas > 0) {
+    console.log(`[importar] ${reclassificadas} items reclassificados de SINAPI/ORSE pra PROPRIA por sufixo de adaptação`);
+  }
   const { data: persistidas, error: cErr } = await admin
     .from('composicoes_extraidas')
     .insert(compRows)
