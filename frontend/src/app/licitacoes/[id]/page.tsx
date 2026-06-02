@@ -5,6 +5,7 @@ import { notFound } from 'next/navigation';
 import { ChecklistPreCadastro } from './checklist-pre-cadastro';
 import { DiagnosticoCadastro } from './diagnostico-cadastro';
 import { ExtractionPanel } from './extraction-panel';
+import { StatusActions } from './status-actions';
 import { PollRefresher } from './poll-refresher';
 import { ProposalCard } from './proposal-card';
 import type { ExtractedItem } from './actions';
@@ -242,6 +243,8 @@ export default async function LicitacaoDetailPage({
             orcafascio_proposta_budget_id: licitacao.orcafascio_proposta_budget_id,
           }}
         />
+
+        <StatusActions licitacaoId={licitacao.id} status={licitacao.status} />
 
         <ExtractionPanel
           licitacaoId={licitacao.id}

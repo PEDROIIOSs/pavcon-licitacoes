@@ -122,6 +122,32 @@ const ORCAFASCIO_BANKS: Record<string, { has_state: boolean }> = {
 // data_base_descricao costuma ser separado por vírgula com formatos mistos:
 //   "SINAPI PI 02/2026, SEINFRA CE 28, ORSE SE 01/2026, SICRO PI 10/2025"
 // → SEINFRA: data="28" (não MM/AAAA), ORSE: estado="SE" + data="01/2026"
+// Converte nome de mês PT-BR pra "MM/AAAA". Aceita variações comuns vindas
+// do LLM: "Janeiro/2026", "jan/26", "fevereiro de 2026", "fev/2026".
+function parseMesNomeado(raw: string): string | null {
+  const meses: Record<string, string> = {
+    jan: '01', janeiro: '01',
+    fev: '02', fevereiro: '02',
+    mar: '03', marco: '03', março: '03',
+    abr: '04', abril: '04',
+    mai: '05', maio: '05',
+    jun: '06', junho: '06',
+    jul: '07', julho: '07',
+    ago: '08', agosto: '08',
+    set: '09', setembro: '09',
+    out: '10', outubro: '10',
+    nov: '11', novembro: '11',
+    dez: '12', dezembro: '12',
+  };
+  // Casa "fevereiro/2026", "fev/26", "fevereiro de 2026"
+  const m = raw.toLowerCase().match(/([a-zç]+)(?:\s*\/\s*|\s+de\s+)(\d{4}|\d{2})/);
+  if (!m) return null;
+  const mm = meses[m[1]];
+  if (!mm) return null;
+  const year = m[2].length === 2 ? `20${m[2]}` : m[2];
+  return `${mm}/${year}`;
+}
+
 function inferBaseData(
   cabecalho: Record<string, unknown> | null,
   banco: string,
@@ -136,6 +162,7 @@ function inferBaseData(
     const token = tokens.find((t) => re.test(t));
     if (!token) continue;
     const ufMatch = token.match(/\b([A-Z]{2})\b/);
+    // Tenta MM/AAAA, MM/AA, nome do mês, ou número puro (ex: SEINFRA 28)
     const dataMatch = token.match(/(\d{1,2}\/\d{2,4})|\b(\d{2,3})\b(?![A-Za-z])/);
     let data = '';
     if (dataMatch) {
@@ -147,11 +174,33 @@ function inferBaseData(
         data = dataMatch[2]; // ex: "28" pra SEINFRA
       }
     }
+    // Fallback no token: tenta nome de mês ("Janeiro/2026")
+    if (!data) {
+      const nomeado = parseMesNomeado(token);
+      if (nomeado) data = nomeado;
+    }
     if (data) {
       return { estado: (ufMatch?.[1] ?? ufLicit).toUpperCase(), data };
     }
   }
-  // Fallback: mês passado
+  // Token não casou com nome do banco — quando data_base_descricao traz só
+  // a data sem mencionar o banco (ex: "Janeiro/2026"), aplica a todos.
+  // Bug observado em "Reforma estádio Batalha": cabecalho = "Janeiro/2026"
+  // virava fallback "mês passado" = 04/2026 → Orçafascio rejeitou e ficou
+  // com 01/2026 default da empresa, mas os codes modernos do edital
+  // (jan/2026) zeravam porque ainda não existem na base antiga.
+  const direto = parseMesNomeado(desc);
+  if (direto) {
+    return { estado: ufLicit, data: direto };
+  }
+  // Tenta MM/AAAA direto na desc inteira
+  const dataMatch = desc.match(/(\d{1,2}\/\d{2,4})/);
+  if (dataMatch) {
+    const [mm, yy] = dataMatch[1].split('/');
+    const year = yy.length === 2 ? `20${yy}` : yy;
+    return { estado: ufLicit, data: `${mm.padStart(2, '0')}/${year}` };
+  }
+  // Último recurso: mês passado
   const now = new Date();
   const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const data = `${String(lastMonth.getMonth() + 1).padStart(2, '0')}/${lastMonth.getFullYear()}`;

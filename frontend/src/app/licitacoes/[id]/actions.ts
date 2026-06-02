@@ -1246,13 +1246,85 @@ export async function resetOrcafascio(licitacaoId: string): Promise<ActionResult
 }
 
 export async function resetToDraft(licitacaoId: string): Promise<ActionResult> {
-  // Útil quando a extração falha: zerar pra rascunho e tentar de novo.
+  // Volta pro estado inicial: status='rascunho' + apaga extracoes/composicoes
+  // pra o user poder re-extrair do zero. Útil quando JSON do LLM veio
+  // muito errado e precisa começar de novo.
   const supabase = await createClient();
-  const { error } = await supabase
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { error: 'Não autenticado.' };
+  const admin = createAdminClient();
+
+  // Ordem: composicoes_extraidas antes de extracoes_ocr (FK NO ACTION).
+  // composicao_propria_itens cascade-deleta com composicoes_extraidas.
+  await admin.from('composicoes_extraidas').delete().eq('licitacao_id', licitacaoId);
+  await admin.from('extracoes_ocr').delete().eq('licitacao_id', licitacaoId);
+  // Zera campos preenchidos pelo cadastramento
+  const { error } = await admin
     .from('licitacoes')
-    .update({ status: 'rascunho' })
+    .update({
+      status: 'rascunho',
+      fase1_concluida_em: null,
+      orcafascio_orcamento_base_id: null,
+      orcafascio_orcamento_base_codigo: null,
+      cadastro_resumo: null,
+    })
     .eq('id', licitacaoId);
   if (error) return { error: error.message };
+  revalidatePath(`/licitacoes/${licitacaoId}`);
+  return { ok: true };
+}
+
+/**
+ * Volta pra etapa de revisão humana mantendo o JSON extraído.
+ * Útil quando o cadastramento gerou problemas e o orçamentista quer
+ * ajustar item específico do JSON sem perder o que já foi feito.
+ *
+ * Faz: zera cadastramento (composition_ids, budget_id, resumo) + volta status
+ * pra 'aguardando_revisao_humana'. Preserva extracoes_ocr + composicoes_extraidas.
+ */
+export async function resetToReview(licitacaoId: string): Promise<ActionResult> {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { error: 'Não autenticado.' };
+  const admin = createAdminClient();
+
+  // Limpa IDs de cadastramento mas mantém extração e composições extraídas
+  await admin
+    .from('composicoes_extraidas')
+    .update({ orcafascio_composition_id: null })
+    .eq('licitacao_id', licitacaoId);
+  // State machine: precisa transitar via 'erro' pra chegar em
+  // aguardando_revisao_humana de fase1_concluida (não há transição direta)
+  await admin
+    .from('licitacoes')
+    .update({ status: 'erro' })
+    .eq('id', licitacaoId);
+  const { error } = await admin
+    .from('licitacoes')
+    .update({
+      status: 'aguardando_revisao_humana',
+      fase1_concluida_em: null,
+      orcafascio_orcamento_base_id: null,
+      orcafascio_orcamento_base_codigo: null,
+      cadastro_resumo: null,
+    })
+    .eq('id', licitacaoId);
+  if (error) return { error: error.message };
+  // Invalida sessão web pra próximo cadastro fazer login fresco
+  const { data: creds } = await admin
+    .from('api_credentials')
+    .select('id, metadata')
+    .eq('provider', 'orcafascio')
+    .eq('ativo', true);
+  const credWebId = (creds ?? []).find(
+    (c) => (c.metadata as { auth_type?: string } | null)?.auth_type === 'web',
+  )?.id;
+  if (credWebId) {
+    await admin
+      .from('orcafascio_sessoes')
+      .delete()
+      .eq('credential_id', credWebId);
+  }
   revalidatePath(`/licitacoes/${licitacaoId}`);
   return { ok: true };
 }
