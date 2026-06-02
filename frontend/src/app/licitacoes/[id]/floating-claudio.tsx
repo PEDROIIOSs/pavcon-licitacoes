@@ -1,0 +1,325 @@
+'use client';
+
+import { useEffect, useState, useTransition } from 'react';
+import Link from 'next/link';
+import { analisarLicitacao, ignorarDiagnostico, marcarResolvido } from '@/lib/agente/actions';
+import { executarAutoFix } from '@/lib/agente/auto-fixes';
+
+interface Diagnostico {
+  id: number;
+  tipo: string;
+  severidade: 'info' | 'aviso' | 'erro' | 'sucesso';
+  titulo: string;
+  mensagem?: string | null;
+  sugestao?: string | null;
+  acao_acionavel?: {
+    tipo: string;
+    params: Record<string, unknown>;
+    label: string;
+  } | null;
+  contexto?: Record<string, unknown> | null;
+}
+
+interface Props {
+  licitacaoId: string;
+}
+
+const AUTO_FIX_DISPONIVEL: Record<string, { label: string; descricao: string }> = {
+  codes_adaptados_nao_reclassificados: {
+    label: '🤖 Cláudio resolver agora',
+    descricao: 'Reclassifica esses items pra PROPRIA automaticamente',
+  },
+  aplicar_mapeamentos_pendentes: {
+    label: '🤖 Aplicar mapeamentos novos',
+    descricao: 'Limpa MyBase IDs pra recriar com os codes mapeados',
+  },
+};
+
+const SEV_STYLES: Record<string, { dot: string; ring: string }> = {
+  erro: { dot: 'bg-red-500', ring: 'ring-red-200' },
+  aviso: { dot: 'bg-amber-500', ring: 'ring-amber-200' },
+  info: { dot: 'bg-blue-500', ring: 'ring-blue-200' },
+  sucesso: { dot: 'bg-emerald-500', ring: 'ring-emerald-200' },
+};
+
+const ClaudioAvatar = ({ size = 24, className = '' }: { size?: number; className?: string }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    className={className}
+  >
+    <path d="M12 2v3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    <circle cx="12" cy="2" r="1" fill="currentColor" />
+    <rect x="5" y="6" width="14" height="11" rx="2.5" stroke="currentColor" strokeWidth="2" fill="none" />
+    <circle cx="9" cy="11" r="1.3" fill="currentColor" />
+    <circle cx="15" cy="11" r="1.3" fill="currentColor" />
+    <path d="M9 14.5h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    <path d="M8 17v2M16 17v2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    <rect x="7" y="19" width="10" height="3" rx="1" stroke="currentColor" strokeWidth="2" fill="none" />
+  </svg>
+);
+
+export function FloatingClaudio({ licitacaoId }: Props) {
+  const [aberto, setAberto] = useState(false);
+  const [diagnosticos, setDiagnosticos] = useState<Diagnostico[]>([]);
+  const [carregando, setCarregando] = useState(true);
+  const [isPending, startTransition] = useTransition();
+  const [erro, setErro] = useState<string | null>(null);
+  const [sucesso, setSucesso] = useState<string | null>(null);
+
+  // Carrega persistência de estado aberto/fechado
+  useEffect(() => {
+    const saved = localStorage.getItem('claudio_aberto');
+    if (saved === '1') setAberto(true);
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('claudio_aberto', aberto ? '1' : '0');
+  }, [aberto]);
+
+  // Análise automática ao montar
+  useEffect(() => {
+    setCarregando(true);
+    analisarLicitacao(licitacaoId)
+      .then((r) => {
+        if (r.error) setErro(r.error);
+        else if (r.diagnosticos) setDiagnosticos(r.diagnosticos as Diagnostico[]);
+      })
+      .finally(() => setCarregando(false));
+  }, [licitacaoId]);
+
+  function recarregar() {
+    setErro(null);
+    setSucesso(null);
+    setCarregando(true);
+    startTransition(async () => {
+      const r = await analisarLicitacao(licitacaoId);
+      if (r.error) setErro(r.error);
+      else if (r.diagnosticos) setDiagnosticos(r.diagnosticos as Diagnostico[]);
+      setCarregando(false);
+    });
+  }
+
+  function handleAutoFix(diag: Diagnostico) {
+    setErro(null);
+    setSucesso(null);
+    startTransition(async () => {
+      const r = await executarAutoFix(licitacaoId, diag.tipo);
+      if (r.error) {
+        setErro(r.error);
+      } else {
+        setSucesso(r.mensagem ?? `Cláudio aplicou ${r.mudancas ?? 0} mudança(s).`);
+        // Recarrega diagnósticos
+        const ar = await analisarLicitacao(licitacaoId);
+        if (ar.diagnosticos) setDiagnosticos(ar.diagnosticos as Diagnostico[]);
+      }
+    });
+  }
+
+  function handleResolver(diag: Diagnostico, aprender: boolean) {
+    startTransition(async () => {
+      const r = await marcarResolvido(diag.id, aprender);
+      if (r.error) setErro(r.error);
+      else setDiagnosticos((prev) => prev.filter((d) => d.id !== diag.id));
+    });
+  }
+
+  function handleIgnorar(diag: Diagnostico) {
+    startTransition(async () => {
+      const r = await ignorarDiagnostico(diag.id);
+      if (r.error) setErro(r.error);
+      else setDiagnosticos((prev) => prev.filter((d) => d.id !== diag.id));
+    });
+  }
+
+  const totalErros = diagnosticos.filter((d) => d.severidade === 'erro').length;
+  const totalAvisos = diagnosticos.filter((d) => d.severidade === 'aviso').length;
+  const temPendencia = diagnosticos.length > 0;
+
+  return (
+    <>
+      {/* Botão flutuante fixo no canto direito */}
+      {!aberto && (
+        <button
+          onClick={() => setAberto(true)}
+          className="fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-purple-600 text-white shadow-lg ring-4 ring-purple-200 transition hover:scale-110 hover:bg-purple-700"
+          title={
+            temPendencia
+              ? `${totalErros} erro(s), ${totalAvisos} aviso(s) — clique pra abrir o Cláudio`
+              : 'Cláudio — assistente de orçamentos'
+          }
+          aria-label="Abrir Cláudio"
+        >
+          <ClaudioAvatar size={32} />
+          {temPendencia && (
+            <span className="absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full bg-red-500 text-xs font-bold text-white ring-2 ring-white">
+              {diagnosticos.length}
+            </span>
+          )}
+        </button>
+      )}
+
+      {/* Painel lateral */}
+      {aberto && (
+        <aside className="fixed right-0 top-0 z-50 flex h-full w-full flex-col bg-white shadow-2xl sm:w-96">
+          {/* Header */}
+          <header className="flex items-center justify-between border-b border-purple-200 bg-gradient-to-br from-purple-600 to-purple-700 px-4 py-3 text-white">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/20">
+                <ClaudioAvatar size={24} />
+              </div>
+              <div>
+                <h2 className="text-sm font-semibold">Cláudio</h2>
+                <p className="text-[10px] opacity-80">Assistente de orçamentos</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={recarregar}
+                disabled={carregando || isPending}
+                className="rounded p-1.5 hover:bg-white/10 disabled:opacity-50"
+                title="Reanalisar agora"
+                aria-label="Reanalisar"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="23 4 23 10 17 10" />
+                  <polyline points="1 20 1 14 7 14" />
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                </svg>
+              </button>
+              <button
+                onClick={() => setAberto(false)}
+                className="rounded p-1.5 hover:bg-white/10"
+                title="Fechar"
+                aria-label="Fechar"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+          </header>
+
+          {/* Body */}
+          <div className="flex-1 overflow-y-auto bg-zinc-50 px-3 py-3">
+            {/* Mensagem do Cláudio */}
+            <div className="mb-3 flex gap-2">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-600 text-white">
+                <ClaudioAvatar size={18} />
+              </div>
+              <div className="max-w-[80%] rounded-2xl rounded-tl-sm bg-white p-3 text-xs text-zinc-700 shadow-sm">
+                {carregando ? (
+                  <p>Analisando a licitação… 🔍</p>
+                ) : diagnosticos.length === 0 ? (
+                  <p>
+                    Tudo certo por aqui! ✓<br />
+                    Não detectei problemas pendentes nessa licitação.
+                  </p>
+                ) : (
+                  <p>
+                    Olha, detectei <strong>{diagnosticos.length}</strong>{' '}
+                    {diagnosticos.length === 1 ? 'pendência' : 'pendências'} aqui
+                    {totalErros > 0 && (
+                      <>
+                        {' '}({totalErros} {totalErros === 1 ? 'erro crítico' : 'erros críticos'})
+                      </>
+                    )}
+                    . Vou listar pra você abaixo, e onde eu puder resolver sozinho, é só clicar
+                    <strong> &quot;🤖 Cláudio resolver agora&quot;</strong>.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {erro && (
+              <div className="mb-3 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-800">
+                ❌ {erro}
+              </div>
+            )}
+            {sucesso && (
+              <div className="mb-3 rounded-md border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-800">
+                ✓ {sucesso}
+              </div>
+            )}
+
+            {/* Lista de diagnósticos */}
+            <div className="space-y-2">
+              {diagnosticos.map((d) => {
+                const sev = SEV_STYLES[d.severidade];
+                const autofix = AUTO_FIX_DISPONIVEL[d.tipo];
+                return (
+                  <div
+                    key={d.id}
+                    className={`rounded-lg border bg-white p-3 text-xs shadow-sm ring-2 ${sev.ring}`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <span className={`mt-1.5 inline-block h-2 w-2 shrink-0 rounded-full ${sev.dot}`} />
+                      <div className="min-w-0 flex-1">
+                        <p className="font-semibold text-zinc-900">{d.titulo}</p>
+                        {d.mensagem && (
+                          <p className="mt-1 text-[11px] text-zinc-600">{d.mensagem}</p>
+                        )}
+                        {d.sugestao && (
+                          <p className="mt-1.5 rounded bg-zinc-50 p-1.5 text-[11px] text-zinc-700">
+                            💡 {d.sugestao}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Ações */}
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-zinc-100 pt-2">
+                      {autofix && (
+                        <button
+                          onClick={() => handleAutoFix(d)}
+                          disabled={isPending}
+                          className="rounded bg-purple-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-purple-700 disabled:opacity-50"
+                          title={autofix.descricao}
+                        >
+                          {autofix.label}
+                        </button>
+                      )}
+                      {d.acao_acionavel?.tipo === 'abrir_mapeamentos' && (
+                        <Link
+                          href="/dashboard/code-mappings"
+                          className="rounded border border-purple-300 bg-white px-2 py-1 text-[10px] font-medium text-purple-700 hover:bg-purple-50"
+                        >
+                          {d.acao_acionavel.label}
+                        </Link>
+                      )}
+                      <button
+                        onClick={() => handleResolver(d, true)}
+                        disabled={isPending}
+                        className="rounded border border-emerald-300 bg-white px-2 py-1 text-[10px] font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                        title="Resolvi manualmente — Cláudio aprende esse padrão pra editais futuros"
+                      >
+                        ✓ Resolvi
+                      </button>
+                      <button
+                        onClick={() => handleIgnorar(d)}
+                        disabled={isPending}
+                        className="rounded border border-zinc-300 bg-white px-2 py-1 text-[10px] text-zinc-600 hover:bg-zinc-50 disabled:opacity-50"
+                      >
+                        Ignorar
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Footer (preparado pra chat futuro com Claude API) */}
+          <footer className="border-t border-zinc-200 bg-white px-3 py-2 text-[10px] text-zinc-500">
+            🔒 Cláudio só atua nesta licitação. Quando você marca &quot;Resolvi&quot;, ele
+            aprende o padrão pra usar em editais futuros.
+          </footer>
+        </aside>
+      )}
+    </>
+  );
+}

@@ -3,9 +3,9 @@ import { formatBRL, formatDate, statusColor, statusLabel } from '@/lib/utils';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ChecklistPreCadastro } from './checklist-pre-cadastro';
-import { AgentePanel } from './agente-panel';
 import { DiagnosticoCadastro } from './diagnostico-cadastro';
 import { ExtractionPanel } from './extraction-panel';
+import { FloatingClaudio } from './floating-claudio';
 import { StatusActions } from './status-actions';
 import { PollRefresher } from './poll-refresher';
 import { ProposalCard } from './proposal-card';
@@ -245,8 +245,6 @@ export default async function LicitacaoDetailPage({
           }}
         />
 
-        <AgentePanel licitacaoId={licitacao.id} diagnosticosIniciais={[]} />
-
         <StatusActions licitacaoId={licitacao.id} status={licitacao.status} />
 
         <ExtractionPanel
@@ -379,6 +377,11 @@ export default async function LicitacaoDetailPage({
           )}
         </section>
       </main>
+
+      {/* Widget flutuante de suporte — fica fixo no canto direito em todas
+          as telas da licitação. Analisa automaticamente ao abrir + permite
+          auto-fix em 1-click pros padrões conhecidos. */}
+      <FloatingClaudio licitacaoId={licitacao.id} />
     </div>
   );
 }
