@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState, useTransition } from 'react';
 import Link from 'next/link';
+import { useEffect, useRef, useState, useTransition } from 'react';
 import { analisarLicitacao, ignorarDiagnostico, marcarResolvido } from '@/lib/agente/actions';
 import { executarAutoFix } from '@/lib/agente/auto-fixes';
+import { type ChatMensagem, chatComClaudio } from '@/lib/agente/chat';
 
 interface Diagnostico {
   id: number;
@@ -62,25 +63,34 @@ const ClaudioAvatar = ({ size = 24, className = '' }: { size?: number; className
   </svg>
 );
 
+type Aba = 'diagnosticos' | 'chat';
+
 export function FloatingClaudio({ licitacaoId }: Props) {
   const [aberto, setAberto] = useState(false);
+  const [aba, setAba] = useState<Aba>('diagnosticos');
   const [diagnosticos, setDiagnosticos] = useState<Diagnostico[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [isPending, startTransition] = useTransition();
   const [erro, setErro] = useState<string | null>(null);
   const [sucesso, setSucesso] = useState<string | null>(null);
 
-  // Carrega persistência de estado aberto/fechado
+  // Chat state
+  const [historico, setHistorico] = useState<ChatMensagem[]>([]);
+  const [perguntaAtual, setPerguntaAtual] = useState('');
+  const [chatPensando, setChatPensando] = useState(false);
+  const chatBottomRef = useRef<HTMLDivElement>(null);
+
+  // Persistência aberto/fechado
   useEffect(() => {
     const saved = localStorage.getItem('claudio_aberto');
     if (saved === '1') setAberto(true);
+    const savedAba = localStorage.getItem('claudio_aba');
+    if (savedAba === 'chat' || savedAba === 'diagnosticos') setAba(savedAba);
   }, []);
+  useEffect(() => { localStorage.setItem('claudio_aberto', aberto ? '1' : '0'); }, [aberto]);
+  useEffect(() => { localStorage.setItem('claudio_aba', aba); }, [aba]);
 
-  useEffect(() => {
-    localStorage.setItem('claudio_aberto', aberto ? '1' : '0');
-  }, [aberto]);
-
-  // Análise automática ao montar
+  // Análise automática
   useEffect(() => {
     setCarregando(true);
     analisarLicitacao(licitacaoId)
@@ -90,6 +100,11 @@ export function FloatingClaudio({ licitacaoId }: Props) {
       })
       .finally(() => setCarregando(false));
   }, [licitacaoId]);
+
+  // Scroll chat pro fim quando muda histórico
+  useEffect(() => {
+    chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [historico, chatPensando]);
 
   function recarregar() {
     setErro(null);
@@ -108,11 +123,9 @@ export function FloatingClaudio({ licitacaoId }: Props) {
     setSucesso(null);
     startTransition(async () => {
       const r = await executarAutoFix(licitacaoId, diag.tipo);
-      if (r.error) {
-        setErro(r.error);
-      } else {
+      if (r.error) setErro(r.error);
+      else {
         setSucesso(r.mensagem ?? `Cláudio aplicou ${r.mudancas ?? 0} mudança(s).`);
-        // Recarrega diagnósticos
         const ar = await analisarLicitacao(licitacaoId);
         if (ar.diagnosticos) setDiagnosticos(ar.diagnosticos as Diagnostico[]);
       }
@@ -135,13 +148,52 @@ export function FloatingClaudio({ licitacaoId }: Props) {
     });
   }
 
+  async function enviarPergunta() {
+    const pergunta = perguntaAtual.trim();
+    if (!pergunta) return;
+    setPerguntaAtual('');
+    setErro(null);
+    const novoHistorico: ChatMensagem[] = [
+      ...historico,
+      { role: 'user', content: pergunta, timestamp: new Date().toISOString() },
+    ];
+    setHistorico(novoHistorico);
+    setChatPensando(true);
+    try {
+      const r = await chatComClaudio(licitacaoId, historico, pergunta);
+      if (r.error) {
+        setErro(r.error);
+        setHistorico(novoHistorico); // mantém pergunta do user
+      } else if (r.resposta) {
+        const respostaFmt = r.acoes_executadas && r.acoes_executadas.length > 0
+          ? `${r.resposta}\n\n_(executei ${r.acoes_executadas.length} ação(ões))_`
+          : r.resposta;
+        setHistorico([
+          ...novoHistorico,
+          { role: 'assistant', content: respostaFmt, timestamp: new Date().toISOString() },
+        ]);
+        if (r.stub) {
+          // API key não setada — diagnosticos podem ter mudado mesmo assim
+        } else if (r.acoes_executadas && r.acoes_executadas.length > 0) {
+          // Recarrega diagnósticos pq Cláudio pode ter aplicado fixes
+          const ar = await analisarLicitacao(licitacaoId);
+          if (ar.diagnosticos) setDiagnosticos(ar.diagnosticos as Diagnostico[]);
+        }
+      }
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : String(e));
+    } finally {
+      setChatPensando(false);
+    }
+  }
+
   const totalErros = diagnosticos.filter((d) => d.severidade === 'erro').length;
   const totalAvisos = diagnosticos.filter((d) => d.severidade === 'aviso').length;
   const temPendencia = diagnosticos.length > 0;
 
   return (
     <>
-      {/* Botão flutuante fixo no canto direito */}
+      {/* Botão flutuante */}
       {!aberto && (
         <button
           onClick={() => setAberto(true)}
@@ -165,7 +217,6 @@ export function FloatingClaudio({ licitacaoId }: Props) {
       {/* Painel lateral */}
       {aberto && (
         <aside className="fixed right-0 top-0 z-50 flex h-full w-full flex-col bg-white shadow-2xl sm:w-96">
-          {/* Header */}
           <header className="flex items-center justify-between border-b border-purple-200 bg-gradient-to-br from-purple-600 to-purple-700 px-4 py-3 text-white">
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/20">
@@ -182,7 +233,6 @@ export function FloatingClaudio({ licitacaoId }: Props) {
                 disabled={carregando || isPending}
                 className="rounded p-1.5 hover:bg-white/10 disabled:opacity-50"
                 title="Reanalisar agora"
-                aria-label="Reanalisar"
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="23 4 23 10 17 10" />
@@ -193,8 +243,6 @@ export function FloatingClaudio({ licitacaoId }: Props) {
               <button
                 onClick={() => setAberto(false)}
                 className="rounded p-1.5 hover:bg-white/10"
-                title="Fechar"
-                aria-label="Fechar"
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <line x1="18" y1="6" x2="6" y2="18" />
@@ -204,119 +252,210 @@ export function FloatingClaudio({ licitacaoId }: Props) {
             </div>
           </header>
 
-          {/* Body */}
-          <div className="flex-1 overflow-y-auto bg-zinc-50 px-3 py-3">
-            {/* Mensagem do Cláudio */}
-            <div className="mb-3 flex gap-2">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-600 text-white">
-                <ClaudioAvatar size={18} />
-              </div>
-              <div className="max-w-[80%] rounded-2xl rounded-tl-sm bg-white p-3 text-xs text-zinc-700 shadow-sm">
-                {carregando ? (
-                  <p>Analisando a licitação… 🔍</p>
-                ) : diagnosticos.length === 0 ? (
-                  <p>
-                    Tudo certo por aqui! ✓<br />
-                    Não detectei problemas pendentes nessa licitação.
-                  </p>
-                ) : (
-                  <p>
-                    Olha, detectei <strong>{diagnosticos.length}</strong>{' '}
-                    {diagnosticos.length === 1 ? 'pendência' : 'pendências'} aqui
-                    {totalErros > 0 && (
-                      <>
-                        {' '}({totalErros} {totalErros === 1 ? 'erro crítico' : 'erros críticos'})
-                      </>
-                    )}
-                    . Vou listar pra você abaixo, e onde eu puder resolver sozinho, é só clicar
-                    <strong> &quot;🤖 Cláudio resolver agora&quot;</strong>.
-                  </p>
-                )}
-              </div>
-            </div>
-
-            {erro && (
-              <div className="mb-3 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-800">
-                ❌ {erro}
-              </div>
-            )}
-            {sucesso && (
-              <div className="mb-3 rounded-md border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-800">
-                ✓ {sucesso}
-              </div>
-            )}
-
-            {/* Lista de diagnósticos */}
-            <div className="space-y-2">
-              {diagnosticos.map((d) => {
-                const sev = SEV_STYLES[d.severidade];
-                const autofix = AUTO_FIX_DISPONIVEL[d.tipo];
-                return (
-                  <div
-                    key={d.id}
-                    className={`rounded-lg border bg-white p-3 text-xs shadow-sm ring-2 ${sev.ring}`}
-                  >
-                    <div className="flex items-start gap-2">
-                      <span className={`mt-1.5 inline-block h-2 w-2 shrink-0 rounded-full ${sev.dot}`} />
-                      <div className="min-w-0 flex-1">
-                        <p className="font-semibold text-zinc-900">{d.titulo}</p>
-                        {d.mensagem && (
-                          <p className="mt-1 text-[11px] text-zinc-600">{d.mensagem}</p>
-                        )}
-                        {d.sugestao && (
-                          <p className="mt-1.5 rounded bg-zinc-50 p-1.5 text-[11px] text-zinc-700">
-                            💡 {d.sugestao}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Ações */}
-                    <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-zinc-100 pt-2">
-                      {autofix && (
-                        <button
-                          onClick={() => handleAutoFix(d)}
-                          disabled={isPending}
-                          className="rounded bg-purple-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-purple-700 disabled:opacity-50"
-                          title={autofix.descricao}
-                        >
-                          {autofix.label}
-                        </button>
-                      )}
-                      {d.acao_acionavel?.tipo === 'abrir_mapeamentos' && (
-                        <Link
-                          href="/dashboard/code-mappings"
-                          className="rounded border border-purple-300 bg-white px-2 py-1 text-[10px] font-medium text-purple-700 hover:bg-purple-50"
-                        >
-                          {d.acao_acionavel.label}
-                        </Link>
-                      )}
-                      <button
-                        onClick={() => handleResolver(d, true)}
-                        disabled={isPending}
-                        className="rounded border border-emerald-300 bg-white px-2 py-1 text-[10px] font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
-                        title="Resolvi manualmente — Cláudio aprende esse padrão pra editais futuros"
-                      >
-                        ✓ Resolvi
-                      </button>
-                      <button
-                        onClick={() => handleIgnorar(d)}
-                        disabled={isPending}
-                        className="rounded border border-zinc-300 bg-white px-2 py-1 text-[10px] text-zinc-600 hover:bg-zinc-50 disabled:opacity-50"
-                      >
-                        Ignorar
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+          {/* Tabs */}
+          <div className="flex border-b border-zinc-200 bg-zinc-50">
+            <button
+              onClick={() => setAba('diagnosticos')}
+              className={`flex-1 px-3 py-2 text-xs font-medium transition ${
+                aba === 'diagnosticos'
+                  ? 'border-b-2 border-purple-600 text-purple-700'
+                  : 'text-zinc-500 hover:text-zinc-700'
+              }`}
+            >
+              🔍 Diagnósticos
+              {diagnosticos.length > 0 && (
+                <span className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[9px] text-white">
+                  {diagnosticos.length}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => setAba('chat')}
+              className={`flex-1 px-3 py-2 text-xs font-medium transition ${
+                aba === 'chat'
+                  ? 'border-b-2 border-purple-600 text-purple-700'
+                  : 'text-zinc-500 hover:text-zinc-700'
+              }`}
+            >
+              💬 Conversar
+            </button>
           </div>
 
-          {/* Footer (preparado pra chat futuro com Claude API) */}
+          {/* Aba Diagnósticos */}
+          {aba === 'diagnosticos' && (
+            <div className="flex-1 overflow-y-auto bg-zinc-50 px-3 py-3">
+              <div className="mb-3 flex gap-2">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-600 text-white">
+                  <ClaudioAvatar size={18} />
+                </div>
+                <div className="max-w-[80%] rounded-2xl rounded-tl-sm bg-white p-3 text-xs text-zinc-700 shadow-sm">
+                  {carregando ? (
+                    <p>Analisando a licitação… 🔍</p>
+                  ) : diagnosticos.length === 0 ? (
+                    <p>Tudo certo por aqui! ✓<br />Não detectei problemas pendentes.</p>
+                  ) : (
+                    <p>
+                      Detectei <strong>{diagnosticos.length}</strong>{' '}
+                      {diagnosticos.length === 1 ? 'pendência' : 'pendências'}
+                      {totalErros > 0 && <> ({totalErros} {totalErros === 1 ? 'crítica' : 'críticas'})</>}.
+                      Click no botão roxo dos que eu sei resolver — aplico na hora.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {erro && <div className="mb-3 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-800">❌ {erro}</div>}
+              {sucesso && <div className="mb-3 rounded-md border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-800">✓ {sucesso}</div>}
+
+              <div className="space-y-2">
+                {diagnosticos.map((d) => {
+                  const sev = SEV_STYLES[d.severidade];
+                  const autofix = AUTO_FIX_DISPONIVEL[d.tipo];
+                  return (
+                    <div key={d.id} className={`rounded-lg border bg-white p-3 text-xs shadow-sm ring-2 ${sev.ring}`}>
+                      <div className="flex items-start gap-2">
+                        <span className={`mt-1.5 inline-block h-2 w-2 shrink-0 rounded-full ${sev.dot}`} />
+                        <div className="min-w-0 flex-1">
+                          <p className="font-semibold text-zinc-900">{d.titulo}</p>
+                          {d.mensagem && <p className="mt-1 text-[11px] text-zinc-600">{d.mensagem}</p>}
+                          {d.sugestao && <p className="mt-1.5 rounded bg-zinc-50 p-1.5 text-[11px] text-zinc-700">💡 {d.sugestao}</p>}
+                        </div>
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-zinc-100 pt-2">
+                        {autofix && (
+                          <button
+                            onClick={() => handleAutoFix(d)}
+                            disabled={isPending}
+                            className="rounded bg-purple-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-purple-700 disabled:opacity-50"
+                            title={autofix.descricao}
+                          >
+                            {autofix.label}
+                          </button>
+                        )}
+                        {d.acao_acionavel?.tipo === 'abrir_mapeamentos' && (
+                          <Link
+                            href="/dashboard/code-mappings"
+                            className="rounded border border-purple-300 bg-white px-2 py-1 text-[10px] font-medium text-purple-700 hover:bg-purple-50"
+                          >
+                            {d.acao_acionavel.label}
+                          </Link>
+                        )}
+                        <button
+                          onClick={() => handleResolver(d, true)}
+                          disabled={isPending}
+                          className="rounded border border-emerald-300 bg-white px-2 py-1 text-[10px] font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                          title="Aprende esse padrão pra editais futuros"
+                        >
+                          ✓ Resolvi
+                        </button>
+                        <button
+                          onClick={() => handleIgnorar(d)}
+                          disabled={isPending}
+                          className="rounded border border-zinc-300 bg-white px-2 py-1 text-[10px] text-zinc-600 hover:bg-zinc-50 disabled:opacity-50"
+                        >
+                          Ignorar
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Aba Chat */}
+          {aba === 'chat' && (
+            <>
+              <div className="flex-1 overflow-y-auto bg-zinc-50 px-3 py-3">
+                {historico.length === 0 && (
+                  <div className="mb-3 flex gap-2">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-600 text-white">
+                      <ClaudioAvatar size={18} />
+                    </div>
+                    <div className="max-w-[80%] rounded-2xl rounded-tl-sm bg-white p-3 text-xs text-zinc-700 shadow-sm">
+                      <p>
+                        Pode mandar a pergunta! 🤖<br />
+                        Exemplos:<br />
+                        • &quot;Por que o total está abaixo do edital?&quot;<br />
+                        • &quot;Resolve esses codes adaptados pra mim&quot;<br />
+                        • &quot;Sugere code SINAPI moderno pra TUBO ACO GALVANIZADO DN 2&quot;<br />
+                        • &quot;Quais bancos estão configurados?&quot;
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {historico.map((m, i) => (
+                  <div key={i} className={`mb-3 flex gap-2 ${m.role === 'user' ? 'flex-row-reverse' : ''}`}>
+                    {m.role === 'assistant' && (
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-600 text-white">
+                        <ClaudioAvatar size={18} />
+                      </div>
+                    )}
+                    <div
+                      className={`max-w-[80%] whitespace-pre-wrap rounded-2xl p-3 text-xs shadow-sm ${
+                        m.role === 'user'
+                          ? 'rounded-tr-sm bg-purple-600 text-white'
+                          : 'rounded-tl-sm bg-white text-zinc-700'
+                      }`}
+                    >
+                      {m.content}
+                    </div>
+                  </div>
+                ))}
+
+                {chatPensando && (
+                  <div className="mb-3 flex gap-2">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-600 text-white">
+                      <ClaudioAvatar size={18} />
+                    </div>
+                    <div className="rounded-2xl rounded-tl-sm bg-white p-3 text-xs text-zinc-500 shadow-sm">
+                      <span className="inline-flex gap-1">
+                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-purple-400" />
+                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-purple-400" style={{ animationDelay: '0.2s' }} />
+                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-purple-400" style={{ animationDelay: '0.4s' }} />
+                      </span>
+                      <span className="ml-2">Cláudio está pensando…</span>
+                    </div>
+                  </div>
+                )}
+
+                {erro && <div className="rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-800">❌ {erro}</div>}
+
+                <div ref={chatBottomRef} />
+              </div>
+
+              {/* Input */}
+              <div className="border-t border-zinc-200 bg-white p-2">
+                <div className="flex gap-2">
+                  <textarea
+                    value={perguntaAtual}
+                    onChange={(e) => setPerguntaAtual(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        enviarPergunta();
+                      }
+                    }}
+                    placeholder="Pergunte pro Cláudio… (Enter envia, Shift+Enter quebra linha)"
+                    disabled={chatPensando}
+                    rows={2}
+                    className="flex-1 resize-none rounded border border-zinc-300 px-2 py-1.5 text-xs focus:border-purple-500 focus:outline-none disabled:bg-zinc-50"
+                  />
+                  <button
+                    onClick={enviarPergunta}
+                    disabled={chatPensando || !perguntaAtual.trim()}
+                    className="rounded bg-purple-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-purple-700 disabled:opacity-50"
+                  >
+                    Enviar
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+
           <footer className="border-t border-zinc-200 bg-white px-3 py-2 text-[10px] text-zinc-500">
-            🔒 Cláudio só atua nesta licitação. Quando você marca &quot;Resolvi&quot;, ele
-            aprende o padrão pra usar em editais futuros.
+            🔒 Cláudio atua só nesta licitação. Quando você marca &quot;Resolvi&quot;, ele aprende.
           </footer>
         </aside>
       )}
