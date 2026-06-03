@@ -48,6 +48,11 @@ const SEV_STYLES: Record<string, { dot: string; ring: string }> = {
   sucesso: { dot: 'bg-emerald-500', ring: 'ring-emerald-200' },
 };
 
+// Engenheiro com capacete de obra — avatar do OrçaPav AI.
+// Renderiza dentro de bg navy (cor da marca Pavcon), então:
+// - currentColor (linhas) = white herdado do parent text-white
+// - capacete preenchido em laranja (#F09000) pra contrastar
+// - camisa só com outline pra manter integração visual com o bg navy
 const ClaudioAvatar = ({ size = 24, className = '' }: { size?: number; className?: string }) => (
   <svg
     width={size}
@@ -56,15 +61,70 @@ const ClaudioAvatar = ({ size = 24, className = '' }: { size?: number; className
     fill="none"
     xmlns="http://www.w3.org/2000/svg"
     className={className}
+    aria-label="Engenheiro Pavcon"
   >
-    <path d="M12 2v3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    <circle cx="12" cy="2" r="1" fill="currentColor" />
-    <rect x="5" y="6" width="14" height="11" rx="2.5" stroke="currentColor" strokeWidth="2" fill="none" />
-    <circle cx="9" cy="11" r="1.3" fill="currentColor" />
-    <circle cx="15" cy="11" r="1.3" fill="currentColor" />
-    <path d="M9 14.5h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    <path d="M8 17v2M16 17v2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    <rect x="7" y="19" width="10" height="3" rx="1" stroke="currentColor" strokeWidth="2" fill="none" />
+    {/* Capacete — preenchido em laranja institucional */}
+    <path
+      d="M5 9.5 Q5 5 12 5 Q19 5 19 9.5 Z"
+      fill="#F09000"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinejoin="round"
+    />
+    {/* Aba do capacete */}
+    <path
+      d="M4 10 L20 10"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+    />
+    {/* Listra detalhe do capacete (sombra/highlight) */}
+    <path
+      d="M6 8 Q12 6.3 18 8"
+      stroke="#FFFFFF"
+      strokeWidth="1"
+      strokeLinecap="round"
+      fill="none"
+      opacity="0.55"
+    />
+    {/* Rosto — ovalado */}
+    <ellipse
+      cx="12"
+      cy="13.4"
+      rx="3.2"
+      ry="2.6"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+    />
+    {/* Olhos */}
+    <circle cx="10.8" cy="13" r="0.5" fill="currentColor" />
+    <circle cx="13.2" cy="13" r="0.5" fill="currentColor" />
+    {/* Sorriso */}
+    <path
+      d="M10.8 14.4 Q12 15.2 13.2 14.4"
+      stroke="currentColor"
+      strokeWidth="0.9"
+      strokeLinecap="round"
+      fill="none"
+    />
+    {/* Ombros / colarinho (outline em currentColor → fica em branco) */}
+    <path
+      d="M6.5 22 L6.5 18.5 Q6.5 16.8 8.5 16.3 L12 18 L15.5 16.3 Q17.5 16.8 17.5 18.5 L17.5 22"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      fill="none"
+    />
+    {/* Gola em V */}
+    <path
+      d="M10 16.8 L12 18 L14 16.8"
+      stroke="currentColor"
+      strokeWidth="1.2"
+      strokeLinejoin="round"
+      fill="none"
+    />
   </svg>
 );
 
