@@ -170,7 +170,24 @@ Deno.serve(async (req: Request) => {
       return errorResponse(500, 'Falha ao ler composicoes_extraidas.', compErr.message);
     }
     if (!composicoes || composicoes.length === 0) {
-      return errorResponse(422, 'Nenhuma composição PRÓPRIA encontrada nesta licitação.');
+      // Licitação só tem itens de bancos referenciais (SINAPI/ORSE/SEINFRA/etc)
+      // — não tem composição PROPRIA pra cadastrar no MyBase. Passo 1 é
+      // simplesmente desnecessário; retornamos sucesso vazio pra que o
+      // usuário possa avançar pro Passo 2 (criar orçamento referenciando
+      // os bancos diretamente) sem ver erro.
+      return jsonResponse({
+        ok: true,
+        skipped: true,
+        composicoes_criadas: 0,
+        composicoes_puladas: 0,
+        itens_adicionados: 0,
+        warnings: [
+          'Esta licitação não tem composições próprias — só itens de bancos referenciais ' +
+          '(SINAPI/ORSE/etc). Passo 1 (MyBase) não é necessário. Vá direto pro Passo 2.',
+        ],
+        trace_id: traceId,
+        proximo_passo: 'Clique em "🚀 Cadastrar tudo no Orçafascio" (Passo 2) — o orçamento vai referenciar os códigos SINAPI/ORSE diretamente.',
+      });
     }
 
     // Pega cabecalho da extração pra montar bases (data-base + UF). Sem isso,
