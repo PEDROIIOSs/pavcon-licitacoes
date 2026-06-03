@@ -73,6 +73,118 @@ export async function otimizarPdfs(
   };
 }
 
+/**
+ * Classifica cada página dos PDFs via Gemini Flash. Retorna preview de quais
+ * são relevantes vs descartáveis — NÃO modifica nada.
+ */
+export async function classificarPaginasPdf(
+  licitacaoId: string,
+): Promise<ActionResult & {
+  arquivos?: Array<{
+    arquivo_id: string;
+    filename: string;
+    total_paginas: number;
+    paginas_relevantes: number[];
+    paginas_descartaveis: number[];
+    reducao_estimada_pct: number;
+    paginas?: Array<{ num: number; classe: string; confianca: number; justificativa: string }>;
+    erro?: string;
+  }>;
+  total_paginas?: number;
+  total_paginas_descartaveis?: number;
+  total_reducao_estimada_pct?: number;
+}> {
+  const supabase = await createClient();
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return { error: 'Não autenticado.' };
+
+  const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/pdf-classificar-paginas`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ licitacao_id: licitacaoId }),
+  });
+  const text = await res.text();
+  let body: Record<string, unknown> = {};
+  try { body = JSON.parse(text); } catch {}
+  if (!res.ok) return { error: `Classificação falhou (${res.status}): ${(body.error as string) ?? text.slice(0, 200)}` };
+  return {
+    ok: true,
+    arquivos: body.arquivos as Array<{
+      arquivo_id: string;
+      filename: string;
+      total_paginas: number;
+      paginas_relevantes: number[];
+      paginas_descartaveis: number[];
+      reducao_estimada_pct: number;
+      paginas?: Array<{ num: number; classe: string; confianca: number; justificativa: string }>;
+      erro?: string;
+    }> | undefined,
+    total_paginas: body.total_paginas as number | undefined,
+    total_paginas_descartaveis: body.total_paginas_descartaveis as number | undefined,
+    total_reducao_estimada_pct: body.total_reducao_estimada_pct as number | undefined,
+  };
+}
+
+/**
+ * Aplica o corte: substitui cada PDF no Storage por uma versão só com as
+ * páginas indicadas. Destrutivo — não tem rollback automático.
+ */
+export async function cortarPaginasPdf(
+  licitacaoId: string,
+  cortes: Array<{ arquivo_id: string; paginas_manter: number[] }>,
+): Promise<ActionResult & {
+  resultados?: Array<{
+    arquivo_id: string;
+    filename?: string;
+    antes_bytes?: number;
+    depois_bytes?: number;
+    paginas_antes?: number;
+    paginas_depois?: number;
+    reducao_pct?: number;
+    erro?: string;
+  }>;
+  total_reducao_pct?: number;
+}> {
+  const supabase = await createClient();
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return { error: 'Não autenticado.' };
+
+  const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/pdf-cortar-paginas`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ licitacao_id: licitacaoId, cortes }),
+  });
+  const text = await res.text();
+  let body: Record<string, unknown> = {};
+  try { body = JSON.parse(text); } catch {}
+
+  revalidatePath(`/licitacoes/${licitacaoId}`);
+
+  if (!res.ok) return { error: `Corte falhou (${res.status}): ${(body.error as string) ?? text.slice(0, 200)}` };
+  return {
+    ok: true,
+    resultados: body.resultados as Array<{
+      arquivo_id: string;
+      filename?: string;
+      antes_bytes?: number;
+      depois_bytes?: number;
+      paginas_antes?: number;
+      paginas_depois?: number;
+      reducao_pct?: number;
+      erro?: string;
+    }> | undefined,
+    total_reducao_pct: body.total_reducao_pct as number | undefined,
+  };
+}
+
 export async function startExtraction(
   licitacaoId: string,
   _arquivoId: string | null,

@@ -8,6 +8,8 @@ import {
   resetOrcafascio,
   resetToDraft,
   saveExtractionEdits,
+  classificarPaginasPdf,
+  cortarPaginasPdf,
   otimizarPdfs,
   startExtraction,
   type ExtractedItem,
@@ -128,6 +130,83 @@ export function ExtractionPanel({
             motivo_skip: o.motivo_skip,
           })),
         });
+      }
+    });
+  }
+
+  // ===== Page filtering — Nível 2 ============================================
+  // Usa Gemini Flash pra classificar páginas por relevância. Mostra preview,
+  // user confirma, aplica corte. Pode reduzir 30-60% o tempo de extração ao
+  // pular declarações, certidões, capas e termos genéricos.
+  const [classifResult, setClassifResult] = useState<{
+    arquivos: Array<{
+      arquivo_id: string;
+      filename: string;
+      total_paginas: number;
+      paginas_relevantes: number[];
+      paginas_descartaveis: number[];
+      reducao_estimada_pct: number;
+      paginas?: Array<{ num: number; classe: string; confianca: number; justificativa: string }>;
+      erro?: string;
+    }>;
+    total_paginas: number;
+    total_paginas_descartaveis: number;
+    total_reducao_estimada_pct: number;
+  } | null>(null);
+  const [cortando, setCortando] = useState(false);
+  const [corteResult, setCorteResult] = useState<{
+    total_reducao_pct: number;
+    resultados: Array<{
+      filename?: string;
+      paginas_antes?: number;
+      paginas_depois?: number;
+      reducao_pct?: number;
+      erro?: string;
+    }>;
+  } | null>(null);
+
+  function handleClassificar() {
+    setActionError(null);
+    setClassifResult(null);
+    setCorteResult(null);
+    startTransition(async () => {
+      const r = await classificarPaginasPdf(licitacaoId);
+      if (r?.error) {
+        setActionError(r.error);
+      } else if (r.arquivos) {
+        setClassifResult({
+          arquivos: r.arquivos,
+          total_paginas: r.total_paginas ?? 0,
+          total_paginas_descartaveis: r.total_paginas_descartaveis ?? 0,
+          total_reducao_estimada_pct: r.total_reducao_estimada_pct ?? 0,
+        });
+      }
+    });
+  }
+
+  function handleAplicarCorte() {
+    if (!classifResult) return;
+    if (!confirm(
+      `Cortar ${classifResult.total_paginas_descartaveis} página(s) classificadas como irrelevantes ` +
+      `(${classifResult.total_reducao_estimada_pct}% do total)? ` +
+      'Os PDFs originais serão SUBSTITUÍDOS no Storage — operação destrutiva sem rollback automático. Continuar?'
+    )) return;
+    setCortando(true);
+    setActionError(null);
+    startTransition(async () => {
+      const cortes = classifResult.arquivos
+        .filter((a) => !a.erro && a.paginas_relevantes.length > 0)
+        .map((a) => ({ arquivo_id: a.arquivo_id, paginas_manter: a.paginas_relevantes }));
+      const r = await cortarPaginasPdf(licitacaoId, cortes);
+      setCortando(false);
+      if (r?.error) {
+        setActionError(r.error);
+      } else if (r.resultados) {
+        setCorteResult({
+          total_reducao_pct: r.total_reducao_pct ?? 0,
+          resultados: r.resultados,
+        });
+        setClassifResult(null); // limpa preview, já aplicou
       }
     });
   }
@@ -351,6 +430,101 @@ export function ExtractionPanel({
                       • {a.filename}: {a.skipped
                         ? <span className="text-zinc-500">{a.motivo_skip}</span>
                         : <span className="text-emerald-700">−{a.reducao_pct}%</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+
+          {/* Card de filtragem inteligente de páginas — Nível 2 */}
+          <div className="rounded-lg border border-pavcon-navy/30 bg-pavcon-navy-50 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1">
+                <p className="text-sm font-semibold text-pavcon-coal">
+                  🔍 Filtrar páginas irrelevantes (recomendado)
+                </p>
+                <p className="mt-1 text-xs text-zinc-700">
+                  Gemini Flash analisa o PDF e identifica páginas como capa, índice, declarações, certidões e termos genéricos.
+                  Pulando essas, a extração principal fica 30-60% mais rápida e barata.
+                </p>
+              </div>
+              <button
+                onClick={handleClassificar}
+                disabled={isPending || cortando}
+                className="shrink-0 rounded-md bg-pavcon-navy px-4 py-2 text-xs font-semibold text-white hover:bg-pavcon-navy-dark disabled:opacity-50"
+              >
+                {isPending && !cortando ? 'Analisando…' : 'Analisar páginas'}
+              </button>
+            </div>
+
+            {/* Preview pós-classificação */}
+            {classifResult && (
+              <div className="mt-3 space-y-2 rounded-md border border-emerald-200 bg-white p-3 text-xs">
+                <p className="font-semibold text-emerald-800">
+                  ✓ Identificadas {classifResult.total_paginas_descartaveis} páginas irrelevantes de {classifResult.total_paginas} ({classifResult.total_reducao_estimada_pct}% de redução)
+                </p>
+                {classifResult.arquivos.map((a) => (
+                  <div key={a.arquivo_id} className="rounded border border-zinc-200 p-2">
+                    <p className="truncate font-medium text-zinc-900">{a.filename}</p>
+                    {a.erro ? (
+                      <p className="mt-0.5 text-red-700">⚠ {a.erro}</p>
+                    ) : (
+                      <>
+                        <p className="text-zinc-600">
+                          Total: <strong>{a.total_paginas}</strong> ·
+                          {' '}Manter: <strong className="text-emerald-700">{a.paginas_relevantes.length}</strong> ·
+                          {' '}Cortar: <strong className="text-amber-700">{a.paginas_descartaveis.length}</strong>
+                          {' '}({a.reducao_estimada_pct}%)
+                        </p>
+                        {a.paginas && a.paginas.length > 0 && (
+                          <details className="mt-1">
+                            <summary className="cursor-pointer text-[10px] text-zinc-500 hover:text-pavcon-navy">
+                              Ver detalhamento por página
+                            </summary>
+                            <ul className="mt-1 max-h-40 space-y-0.5 overflow-y-auto text-[10px]">
+                              {a.paginas.map((p) => {
+                                const relevant = a.paginas_relevantes.includes(p.num);
+                                return (
+                                  <li key={p.num} className={`flex items-center gap-1.5 ${relevant ? 'text-emerald-700' : 'text-amber-700'}`}>
+                                    <span className="font-mono">p.{p.num}</span>
+                                    <span className="font-semibold">{p.classe}</span>
+                                    <span className="text-zinc-500">({(p.confianca * 100).toFixed(0)}%)</span>
+                                    <span className="truncate text-zinc-600">— {p.justificativa}</span>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          </details>
+                        )}
+                      </>
+                    )}
+                  </div>
+                ))}
+                {classifResult.total_paginas_descartaveis > 0 && (
+                  <button
+                    onClick={handleAplicarCorte}
+                    disabled={isPending || cortando}
+                    className="w-full rounded-md bg-pavcon-orange px-4 py-2 text-xs font-semibold text-white shadow hover:bg-pavcon-orange-dark disabled:opacity-50"
+                  >
+                    {cortando ? '✂️ Cortando…' : `✂️ Aplicar corte e remover ${classifResult.total_paginas_descartaveis} páginas`}
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Resultado pós-corte */}
+            {corteResult && (
+              <div className="mt-3 space-y-1 rounded-md border border-emerald-300 bg-emerald-50 p-3 text-xs">
+                <p className="font-bold text-emerald-900">
+                  ✅ Corte aplicado! Redução total: {corteResult.total_reducao_pct}%
+                </p>
+                <ul className="space-y-0.5 text-emerald-800">
+                  {corteResult.resultados.map((r, i) => (
+                    <li key={i} className="truncate">
+                      • {r.filename}: {r.erro
+                        ? <span className="text-red-700">{r.erro}</span>
+                        : <>de <strong>{r.paginas_antes}</strong> pra <strong>{r.paginas_depois}</strong> páginas (−{r.reducao_pct}%)</>}
                     </li>
                   ))}
                 </ul>
