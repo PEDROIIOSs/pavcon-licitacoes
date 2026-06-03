@@ -556,9 +556,26 @@ Deno.serve(async (req: Request) => {
     // ---- 9) Persiste budget_id na licitação + transição --------------------
     // PROPOSTA: não toca no status (orçamento base mantém fase1_concluida)
     if (!isProposta) {
-      // Resumo do cadastramento — UI da licitação lê esse JSON pra mostrar
-      // painel de diagnóstico (items OK, warnings, totais, próximos passos).
+      // Merge com cadastro_resumo existente — cadastrar-edital (Passo 1) já
+      // escreveu warnings com prefixo "[Passo 1 - MyBase]". Preservamos eles
+      // e adicionamos os do Passo 2 com prefixo "[Passo 2 - Orçamento]" pra
+      // o painel de diagnóstico mostrar tudo agrupado por etapa.
+      const { data: licAtual } = await admin
+        .from('licitacoes')
+        .select('cadastro_resumo')
+        .eq('id', licitacaoId)
+        .maybeSingle();
+      const resumoAtual = (licAtual?.cadastro_resumo as Record<string, unknown> | null) ?? {};
+      const warningsAtuais = Array.isArray(resumoAtual.warnings)
+        ? (resumoAtual.warnings as string[])
+        : [];
+      // Mantém só os warnings do Passo 1 e descarta os antigos do Passo 2.
+      const warningsPasso1 = warningsAtuais.filter((w) =>
+        typeof w === 'string' && w.startsWith('[Passo 1 - MyBase]'),
+      );
+      const warningsPasso2Prefixed = warnings.map((w) => `[Passo 2 - Orçamento] ${w}`);
       const cadastroResumo = {
+        ...resumoAtual,
         cadastrado_em: new Date().toISOString(),
         budget_id,
         budget_url: `https://app.orcafascio.com/orc/orcamentos/${budget_id}`,
@@ -568,7 +585,7 @@ Deno.serve(async (req: Request) => {
         bdi: bdiPct,
         leis_sociais_horista: leisHorista,
         bancos_configurados: bancos.map((b) => `${b.nome} ${b.estado ?? ''} ${b.data}`.trim()),
-        warnings,
+        warnings: [...warningsPasso1, ...warningsPasso2Prefixed],
         orcamento_verificado: orcamentoVerificado,
       };
       await admin

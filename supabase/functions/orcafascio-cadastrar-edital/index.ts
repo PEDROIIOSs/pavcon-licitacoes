@@ -790,11 +790,44 @@ Deno.serve(async (req: Request) => {
     }
 
     // ---- 6) Transição: fase1_concluida -----------------------------------------
+    // Também persiste os warnings do Passo 1 (MyBase) dentro de cadastro_resumo
+    // pra o painel DiagnosticoCadastro mostrá-los. Sem isso, o Passo 2 (cadastro
+    // de orçamento) sobrescrevia cadastro_resumo só com SEUS warnings, e os do
+    // Passo 1 — incluindo o consolidado de sub-items descartados (codigo NULL,
+    // coef zero) — sumiam ao terminar o fluxo. Prefixamos com [Passo 1 - MyBase]
+    // pra ficar claro pro orçamentista de onde vem cada warning.
+    const { data: licAtual } = await admin
+      .from('licitacoes')
+      .select('cadastro_resumo')
+      .eq('id', licitacaoId)
+      .maybeSingle();
+    const resumoAtual = (licAtual?.cadastro_resumo as Record<string, unknown> | null) ?? {};
+    const warningsAtuais = Array.isArray(resumoAtual.warnings)
+      ? (resumoAtual.warnings as string[])
+      : [];
+    // Remove eventuais warnings antigos do Passo 1 (retry) e injeta os novos
+    // mantendo os do Passo 2 que ainda não foram regerados.
+    const warningsPasso2 = warningsAtuais.filter((w) =>
+      typeof w === 'string' && !w.startsWith('[Passo 1 - MyBase]'),
+    );
+    const warningsMybasePrefixed = warnings.map((w) => `[Passo 1 - MyBase] ${w}`);
+    const resumoNovo = {
+      ...resumoAtual,
+      mybase: {
+        composicoes_criadas: composicoesCriadas,
+        composicoes_puladas: composicoesPuladas,
+        itens_adicionados: itensAdicionados,
+        warnings,
+        finalizado_em: new Date().toISOString(),
+      },
+      warnings: [...warningsMybasePrefixed, ...warningsPasso2],
+    };
     await admin
       .from('licitacoes')
       .update({
         status: 'fase1_concluida',
         fase1_concluida_em: new Date().toISOString(),
+        cadastro_resumo: resumoNovo,
       })
       .eq('id', licitacaoId);
 
