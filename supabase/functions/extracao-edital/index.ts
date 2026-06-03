@@ -32,12 +32,13 @@ import {
 import { callGemini, GeminiError } from '../_shared/gemini.ts';
 import { PROMPT_VERSION, SYSTEM_PROMPT } from './prompt.ts';
 
-// Gemini 3.1 Pro Preview (preferência do orçamentista). Combinado com page
-// filtering (corta páginas irrelevantes pra reduzir 30-60% do PDF antes),
-// fica dentro do cap de 400s do EdgeRuntime. SE FOR USAR SEM page filter
-// em PDFs > 2MB com muito anexo, pode estourar — nesse caso, voltar pra
-// gemini-2.5-pro ou ativar page filtering antes de extrair.
-const GEMINI_MODEL = 'gemini-3.1-pro-preview';
+// gemini-2.5-pro (definitivo). Tentamos 3.1-pro-preview duas vezes mas com
+// thinking mode ele estoura o cap de 400s do EdgeRuntime em PDFs reais —
+// audit log fica vazio, processo morto antes de retornar. 2.5 Pro completa
+// em 120-180s típico. JSON corrompido eventual (~10% das vezes) é tratado
+// pelas 3 camadas de recuperação (v8): JSON.parse direto + jsonrepair +
+// truncate-to-last-valid. Mais robusto pro pipeline atual.
+const GEMINI_MODEL = 'gemini-2.5-pro';
 const LLM_PROVIDER = 'gemini';
 const VALID_START_STATUSES = new Set(['rascunho', 'aguardando_extracao']);
 
