@@ -8,6 +8,7 @@ import {
   resetOrcafascio,
   resetToDraft,
   saveExtractionEdits,
+  otimizarPdfs,
   startExtraction,
   type ExtractedItem,
 } from './actions';
@@ -95,6 +96,38 @@ export function ExtractionPanel({
     startTransition(async () => {
       const r = await startExtraction(licitacaoId, arquivoId);
       if (r?.error) setActionError(`${r.error}${r.details ? ': ' + JSON.stringify(r.details).slice(0, 200) : ''}`);
+    });
+  }
+
+  // Otimização de PDF antes da extração — reduz tamanho 15-30% via
+  // recompressão lossless (pdf-lib + object streams + strip metadata).
+  // Acelera o upload pro Gemini e economiza tokens.
+  const [otimResult, setOtimResult] = useState<{
+    total_antes_bytes: number;
+    total_depois_bytes: number;
+    total_reducao_pct: number;
+    arquivos: Array<{ filename: string; reducao_pct: number; skipped?: boolean; motivo_skip?: string }>;
+  } | null>(null);
+  function handleOtimizar() {
+    setActionError(null);
+    setOtimResult(null);
+    startTransition(async () => {
+      const r = await otimizarPdfs(licitacaoId);
+      if (r?.error) {
+        setActionError(r.error);
+      } else if (r.otimizados) {
+        setOtimResult({
+          total_antes_bytes: r.total_antes_bytes ?? 0,
+          total_depois_bytes: r.total_depois_bytes ?? 0,
+          total_reducao_pct: r.total_reducao_pct ?? 0,
+          arquivos: r.otimizados.map((o) => ({
+            filename: o.filename,
+            reducao_pct: o.reducao_pct,
+            skipped: o.skipped,
+            motivo_skip: o.motivo_skip,
+          })),
+        });
+      }
     });
   }
 
@@ -196,6 +229,50 @@ export function ExtractionPanel({
 
       {canStart && (
         <div className="space-y-3">
+          {/* Card de otimização do PDF (passo opcional antes da extração) */}
+          <div className="rounded-lg border border-pavcon-orange/30 bg-pavcon-orange-50/50 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1">
+                <p className="text-sm font-semibold text-pavcon-coal">
+                  🗜 Otimizar PDFs antes da extração (opcional)
+                </p>
+                <p className="mt-1 text-xs text-zinc-700">
+                  Recompressão lossless via pdf-lib — reduz 15-30% do tamanho típico, acelera o upload pro Gemini
+                  e economiza tokens de imagem. Não altera o conteúdo visual.
+                </p>
+              </div>
+              <button
+                onClick={handleOtimizar}
+                disabled={isPending}
+                className="shrink-0 rounded-md bg-pavcon-orange px-4 py-2 text-xs font-semibold text-white hover:bg-pavcon-orange-dark disabled:opacity-50"
+              >
+                {isPending ? 'Otimizando…' : 'Otimizar agora'}
+              </button>
+            </div>
+            {otimResult && (
+              <div className="mt-3 rounded-md border border-emerald-200 bg-white p-3 text-xs">
+                {otimResult.total_reducao_pct > 0 ? (
+                  <p className="font-semibold text-emerald-800">
+                    ✓ Reduzido em {otimResult.total_reducao_pct}% ({(otimResult.total_antes_bytes / 1024 / 1024).toFixed(2)} MB → {(otimResult.total_depois_bytes / 1024 / 1024).toFixed(2)} MB)
+                  </p>
+                ) : (
+                  <p className="font-semibold text-zinc-700">
+                    ℹ PDFs já estão bem otimizados — nenhuma redução aplicada.
+                  </p>
+                )}
+                <ul className="mt-1.5 space-y-0.5 text-zinc-600">
+                  {otimResult.arquivos.map((a, i) => (
+                    <li key={i} className="truncate">
+                      • {a.filename}: {a.skipped
+                        ? <span className="text-zinc-500">{a.motivo_skip}</span>
+                        : <span className="text-emerald-700">−{a.reducao_pct}%</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+
           <p className="text-xs text-zinc-600">Escolha como extrair os dados deste orçamento:</p>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             {/* Opção 1 — Gemini API automática */}

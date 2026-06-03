@@ -10,6 +10,69 @@ interface ActionResult {
   details?: unknown;
 }
 
+/**
+ * Otimiza os PDFs da licitação antes da extração:
+ *   - Recompressão lossless via pdf-lib (object streams)
+ *   - Strip de metadata desnecessária
+ *
+ * Reduz 15-30% o tamanho típico, acelera upload pro Gemini e economiza
+ * tokens de imagem. NÃO altera conteúdo visual.
+ *
+ * Retorna stats por arquivo + redução total.
+ */
+export async function otimizarPdfs(
+  licitacaoId: string,
+): Promise<ActionResult & {
+  otimizados?: Array<{
+    filename: string;
+    antes_bytes: number;
+    depois_bytes: number;
+    reducao_pct: number;
+    skipped?: boolean;
+    motivo_skip?: string;
+  }>;
+  total_antes_bytes?: number;
+  total_depois_bytes?: number;
+  total_reducao_pct?: number;
+}> {
+  const supabase = await createClient();
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return { error: 'Não autenticado.' };
+
+  const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/pdf-otimizar`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ licitacao_id: licitacaoId }),
+  });
+  const text = await res.text();
+  let body: Record<string, unknown> = {};
+  try { body = JSON.parse(text); } catch {}
+
+  revalidatePath(`/licitacoes/${licitacaoId}`);
+
+  if (!res.ok) {
+    return { error: `Otimização falhou (${res.status}): ${(body.error as string) ?? text.slice(0, 200)}` };
+  }
+  return {
+    ok: true,
+    otimizados: body.otimizados as Array<{
+      filename: string;
+      antes_bytes: number;
+      depois_bytes: number;
+      reducao_pct: number;
+      skipped?: boolean;
+      motivo_skip?: string;
+    }> | undefined,
+    total_antes_bytes: body.total_antes_bytes as number | undefined,
+    total_depois_bytes: body.total_depois_bytes as number | undefined,
+    total_reducao_pct: body.total_reducao_pct as number | undefined,
+  };
+}
+
 export async function startExtraction(
   licitacaoId: string,
   _arquivoId: string | null,
