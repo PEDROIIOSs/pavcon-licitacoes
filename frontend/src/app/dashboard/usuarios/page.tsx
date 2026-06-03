@@ -5,7 +5,7 @@ import { formatDate } from '@/lib/utils';
 import { CreateUserForm } from './create-form';
 import { RowActions } from './row-actions';
 
-export const metadata = { title: 'Usuários — Pavcon' };
+export const metadata = { title: 'Usuários — OrçaPav AI' };
 export const dynamic = 'force-dynamic';
 
 export default async function UsuariosPage({

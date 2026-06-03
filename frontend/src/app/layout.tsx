@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Pavcon Licitações',
+  title: 'OrçaPav AI',
   description: 'Automação de orçamentos para licitações públicas',
 };
 

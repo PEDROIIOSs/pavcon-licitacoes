@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
 import { ResetForm } from './reset-form';
 
-export const metadata = { title: 'Definir nova senha — Pavcon Licitações' };
+export const metadata = { title: 'Definir nova senha — OrçaPav AI' };
 
 export default async function ResetPasswordPage({
   searchParams,

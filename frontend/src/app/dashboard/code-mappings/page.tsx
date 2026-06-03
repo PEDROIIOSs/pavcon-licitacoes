@@ -4,7 +4,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { formatDate } from '@/lib/utils';
 import { MappingsTable } from './mappings-table';
 
-export const metadata = { title: 'Códigos descontinuados — Pavcon' };
+export const metadata = { title: 'Códigos descontinuados — OrçaPav AI' };
 export const dynamic = 'force-dynamic';
 
 export default async function CodeMappingsPage() {

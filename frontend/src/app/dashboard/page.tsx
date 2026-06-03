@@ -5,7 +5,7 @@ import { isAdmin } from '@/lib/auth';
 import { RowActions } from './row-actions';
 import Link from 'next/link';
 
-export const metadata = { title: 'Painel — Pavcon Orçamentos' };
+export const metadata = { title: 'Painel — OrçaPav AI' };
 
 interface DashboardRow {
   id: string;
@@ -74,7 +74,7 @@ export default async function DashboardPage({
       <header className="border-b border-zinc-200 bg-white">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
           <div>
-            <h1 className="text-lg font-semibold text-zinc-900">Pavcon Orçamentos</h1>
+            <h1 className="text-lg font-semibold text-zinc-900">OrçaPav AI</h1>
             <p className="text-xs text-zinc-500">
               {user?.email ?? '—'}
             </p>

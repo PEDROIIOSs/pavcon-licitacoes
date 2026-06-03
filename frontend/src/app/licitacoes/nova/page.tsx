@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { UploadForm } from './upload-form';
 
-export const metadata = { title: 'Novo orçamento — Pavcon' };
+export const metadata = { title: 'Novo orçamento — OrçaPav AI' };
 
 export default function NovaLicitacaoPage() {
   return (

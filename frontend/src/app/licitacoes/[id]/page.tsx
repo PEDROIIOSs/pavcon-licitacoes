@@ -11,7 +11,7 @@ import { PollRefresher } from './poll-refresher';
 import { ProposalCard } from './proposal-card';
 import type { ExtractedItem } from './actions';
 
-export const metadata = { title: 'Orçamento — Pavcon' };
+export const metadata = { title: 'Orçamento — OrçaPav AI' };
 export const dynamic = 'force-dynamic'; // sempre fresh, refletir estados em transição
 // Server actions desta página (importar JSON manual, cadastrar Orçafascio) fazem
 // múltiplos round-trips ao Supabase. Sem isso, action pesada estoura os 10s
