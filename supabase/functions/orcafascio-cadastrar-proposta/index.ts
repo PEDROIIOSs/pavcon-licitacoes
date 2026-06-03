@@ -154,6 +154,14 @@ Deno.serve(async (req: Request) => {
     // ---- 4) Copia o orçamento base ------------------------------------------
     const { budget_id: novoBudgetId } = await copyBudget(ctx, sourceBudgetId);
 
+    // Delay entre copy e ajustarValor — race observado: chamar ajustarValor
+    // imediatamente após o 302 do copyBudget às vezes pega o orçamento ainda
+    // sendo processado internamente pelo Orçafascio (items não foram todos
+    // copiados ainda), e o ajustarValor aplica fator sobre estado parcial,
+    // corrompendo o budget e gerando 500 ao abrir depois. 2 segundos resolve
+    // na maioria dos casos.
+    await new Promise((r) => setTimeout(r, 2000));
+
     // ---- 5) Aplica ajustar_valor -------------------------------------------
     // O Orçafascio aplica o fator linear sobre TODOS os itens pra alcançar
     // exatamente o `valorProposta`. Como esse valor já respeita a regra de
@@ -166,18 +174,70 @@ Deno.serve(async (req: Request) => {
       warnings.push(`ajustarValor falhou: ${msg.slice(0, 200)} — orçamento copiado mas sem desconto aplicado`);
     }
 
+    // ---- 5.5) Verificação pós-cadastro: confirma que o orçamento existe ----
+    // Bug observado (NOVO ORIENTE 001 - 03/06/2026): copyBudget + ajustarValor
+    // retornam 200 OK mas ao abrir a URL no browser, Orçafascio mostra 500
+    // "Ocorreu um erro durante esse processo". O orçamento ficou em estado
+    // inválido — provável race entre o copy e o ajuste linear que corrompe a
+    // estrutura interna. Sem essa verificação, PavCon mostra "Proposta
+    // cadastrada!" mas o link leva pro 500.
+    //
+    // Faz GET no budget URL — se 200, OK. Se 302/3xx ou 500, o budget está
+    // corrompido e a gente avisa o user pra retentar (não persiste o
+    // budget_id inválido).
+    // Pequeno delay também antes da verificação — dá tempo do Orçafascio
+    // finalizar o ajuste linear antes da gente perguntar se o budget abre.
+    await new Promise((r) => setTimeout(r, 1500));
+
+    let propostaVerificada = false;
+    try {
+      const verifyResp = await fetch(
+        `https://app.orcafascio.com/orc/orcamentos/${novoBudgetId}`,
+        {
+          method: 'GET',
+          headers: {
+            Cookie: ctx.session.cookie_header,
+            'User-Agent': 'pavcon-licitacoes/0.1 (proposta-post-verify)',
+            Accept: 'text/html',
+          },
+          redirect: 'manual',
+        },
+      );
+      if (verifyResp.status === 200) {
+        propostaVerificada = true;
+      } else if (verifyResp.status >= 500) {
+        warnings.push(
+          `⚠ Orçafascio retornou ${verifyResp.status} ao abrir a proposta criada (budget_id=${novoBudgetId}). ` +
+          `Provavelmente o copy + ajustarValor corrompeu o orçamento. Apague esse orçamento manualmente no Orçafascio e tente de novo.`,
+        );
+      } else if (verifyResp.status >= 300 && verifyResp.status < 400) {
+        const location = verifyResp.headers.get('location') ?? '';
+        warnings.push(
+          `⚠ Proposta criada mas Orçafascio redirecionou (${verifyResp.status} → ${location.slice(0, 80)}). ` +
+          'Orçamento pode ter sido movido pra lixeira automaticamente. Cheque manualmente.',
+        );
+      }
+    } catch (e) {
+      warnings.push(`Verificação pós-cadastro da proposta falhou (rede): ${e instanceof Error ? e.message.slice(0, 120) : 'erro'}`);
+    }
+
     // ---- 6) Persiste budget_id da proposta na licitação --------------------
-    await admin
-      .from('licitacoes')
-      .update({
-        desconto_percentual: desconto,
-        valor_proposta_pavcon: valorProposta,
-        orcafascio_proposta_budget_id: novoBudgetId,
-      })
-      .eq('id', licitacaoId);
+    // Só persiste se a verificação passou. Senão, o orçamentista vê o
+    // warning e pode retentar sem o budget_id "fantasma" travar a UI.
+    if (propostaVerificada) {
+      await admin
+        .from('licitacoes')
+        .update({
+          desconto_percentual: desconto,
+          valor_proposta_pavcon: valorProposta,
+          orcafascio_proposta_budget_id: novoBudgetId,
+        })
+        .eq('id', licitacaoId);
+    }
 
     return jsonResponse({
-      ok: true,
+      ok: propostaVerificada,
+      proposta_verificada: propostaVerificada,
       budget_id: novoBudgetId,
       budget_url: `https://app.orcafascio.com/orc/orcamentos/${novoBudgetId}`,
       source_budget_id: sourceBudgetId,
@@ -185,8 +245,9 @@ Deno.serve(async (req: Request) => {
       desconto_percentual: desconto,
       warnings,
       trace_id: traceId,
-      proximo_passo:
-        'Abra o link no Orçafascio pra revisar o orçamento da proposta. Total deve bater com o cálculo MO-aware do PavCon — a divisão interna por item segue ajuste linear do Orçafascio (desconta MO proporcionalmente).',
+      proximo_passo: propostaVerificada
+        ? 'Abra o link no Orçafascio pra revisar o orçamento da proposta. Total deve bater.'
+        : 'Orçamento criado mas Orçafascio retornou erro ao abrir. Apague o orçamento "fantasma" manualmente no Orçafascio (lixeira), depois tente de novo com valor alvo ligeiramente diferente.',
     });
   } catch (err) {
     if (err instanceof OrcafascioWebError) {

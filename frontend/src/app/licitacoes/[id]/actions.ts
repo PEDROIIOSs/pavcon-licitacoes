@@ -1212,6 +1212,21 @@ export async function cadastrarPropostaOrcafascio(
     };
   }
 
+  // Edge function pode retornar ok:false quando a proposta foi criada mas
+  // não passou na verificação pós-cadastro (orçamento "fantasma" que dá 500
+  // ao abrir). Nesse caso surface como erro pra UI mostrar warnings com
+  // instruções de retry.
+  const propostaVerificada = body.proposta_verificada !== false;
+  if (!propostaVerificada) {
+    const warns = (body.warnings as string[] | undefined) ?? [];
+    return {
+      error:
+        warns[0] ??
+        'Orçamento criado mas Orçafascio retornou erro ao abrir. Apague o orçamento "fantasma" manualmente e tente de novo.',
+      warnings: warns,
+    };
+  }
+
   return {
     ok: true,
     budget_id: body.budget_id as string | undefined,
