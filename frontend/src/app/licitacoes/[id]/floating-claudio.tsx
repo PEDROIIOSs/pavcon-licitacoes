@@ -3,7 +3,11 @@
 import Link from 'next/link';
 import { useEffect, useRef, useState, useTransition } from 'react';
 import { analisarLicitacao, ignorarDiagnostico, marcarResolvido } from '@/lib/agente/actions';
-import { executarAutoFix } from '@/lib/agente/auto-fixes';
+import {
+  definirDataBase,
+  executarAutoFix,
+  salvarMapeamentosCodes,
+} from '@/lib/agente/auto-fixes';
 import { type ChatMensagem, chatComClaudio } from '@/lib/agente/chat';
 
 interface Diagnostico {
@@ -80,6 +84,12 @@ export function FloatingClaudio({ licitacaoId }: Props) {
   const [chatPensando, setChatPensando] = useState(false);
   const chatBottomRef = useRef<HTMLDivElement>(null);
 
+  // Inline forms state — keyed pelo id do diagnóstico
+  const [formAberto, setFormAberto] = useState<Record<number, boolean>>({});
+  const [dataBaseInput, setDataBaseInput] = useState<Record<number, string>>({});
+  // Mapping form: { diagId -> { 'FONTE/CODIGO_ORIG' -> 'codigo_novo' } }
+  const [mappingInput, setMappingInput] = useState<Record<number, Record<string, string>>>({});
+
   // Persistência aberto/fechado
   useEffect(() => {
     const saved = localStorage.getItem('claudio_aberto');
@@ -145,6 +155,62 @@ export function FloatingClaudio({ licitacaoId }: Props) {
       const r = await ignorarDiagnostico(diag.id);
       if (r.error) setErro(r.error);
       else setDiagnosticos((prev) => prev.filter((d) => d.id !== diag.id));
+    });
+  }
+
+  function handleDefinirDataBase(diag: Diagnostico) {
+    const valor = (dataBaseInput[diag.id] ?? '').trim();
+    if (!valor) {
+      setErro('Digite a data-base (ex: 04/2026)');
+      return;
+    }
+    setErro(null);
+    setSucesso(null);
+    startTransition(async () => {
+      const r = await definirDataBase(licitacaoId, valor);
+      if (r.error) setErro(r.error);
+      else {
+        setSucesso(r.mensagem ?? 'Data-base definida.');
+        setFormAberto((prev) => ({ ...prev, [diag.id]: false }));
+        const ar = await analisarLicitacao(licitacaoId);
+        if (ar.diagnosticos) setDiagnosticos(ar.diagnosticos as Diagnostico[]);
+      }
+    });
+  }
+
+  function handleSalvarMapeamentos(diag: Diagnostico) {
+    const codes = (diag.acao_acionavel?.params?.codes as Array<{
+      fonte_original: string; codigo_original: string; descricao?: string | null;
+    }> | undefined) ?? [];
+    const inputs = mappingInput[diag.id] ?? {};
+    const mapeamentos = codes
+      .map((c) => {
+        const key = `${c.fonte_original}/${c.codigo_original}`;
+        const codigoNovo = (inputs[key] ?? '').trim();
+        if (!codigoNovo) return null;
+        return {
+          fonte_original: c.fonte_original,
+          codigo_original: c.codigo_original,
+          codigo_novo: codigoNovo,
+          descricao: c.descricao ?? null,
+        };
+      })
+      .filter((m): m is NonNullable<typeof m> => m !== null);
+    if (mapeamentos.length === 0) {
+      setErro('Preencha pelo menos 1 código moderno antes de salvar.');
+      return;
+    }
+    setErro(null);
+    setSucesso(null);
+    startTransition(async () => {
+      const r = await salvarMapeamentosCodes(licitacaoId, mapeamentos);
+      if (r.error) setErro(r.error);
+      else {
+        setSucesso(r.mensagem ?? 'Mapeamentos salvos.');
+        setFormAberto((prev) => ({ ...prev, [diag.id]: false }));
+        const ar = await analisarLicitacao(licitacaoId);
+        if (ar.diagnosticos) setDiagnosticos(ar.diagnosticos as Diagnostico[]);
+      }
     });
   }
 
@@ -332,6 +398,16 @@ export function FloatingClaudio({ licitacaoId }: Props) {
                             {autofix.label}
                           </button>
                         )}
+                        {(d.acao_acionavel?.tipo === 'definir_data_base_inline' ||
+                          d.acao_acionavel?.tipo === 'mapping_inline') && (
+                          <button
+                            onClick={() => setFormAberto((prev) => ({ ...prev, [d.id]: !prev[d.id] }))}
+                            disabled={isPending}
+                            className="rounded bg-purple-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-purple-700 disabled:opacity-50"
+                          >
+                            {formAberto[d.id] ? '✕ Fechar' : d.acao_acionavel.label}
+                          </button>
+                        )}
                         {d.acao_acionavel?.tipo === 'abrir_mapeamentos' && (
                           <Link
                             href="/dashboard/code-mappings"
@@ -356,6 +432,82 @@ export function FloatingClaudio({ licitacaoId }: Props) {
                           Ignorar
                         </button>
                       </div>
+
+                      {/* Inline form: definir data-base */}
+                      {formAberto[d.id] && d.acao_acionavel?.tipo === 'definir_data_base_inline' && (
+                        <div className="mt-2 rounded-md border border-purple-200 bg-purple-50 p-2">
+                          <label className="block text-[10px] font-medium text-purple-900">
+                            Data-base do edital
+                          </label>
+                          <p className="mt-0.5 text-[10px] text-zinc-700">
+                            Formato: <code>MM/AAAA</code> (ex: <code>04/2026</code>) ou <code>mês/ano</code> (ex: <code>abril/2026</code>).
+                            Olha a capa do edital — costuma estar como &quot;SINAPI MM/AAAA&quot;.
+                          </p>
+                          <div className="mt-1.5 flex gap-1.5">
+                            <input
+                              type="text"
+                              autoFocus
+                              value={dataBaseInput[d.id] ?? ''}
+                              onChange={(e) => setDataBaseInput((prev) => ({ ...prev, [d.id]: e.target.value }))}
+                              onKeyDown={(e) => { if (e.key === 'Enter') handleDefinirDataBase(d); }}
+                              placeholder="04/2026"
+                              className="flex-1 rounded border border-purple-300 bg-white px-2 py-1 text-xs text-zinc-900 focus:border-purple-500 focus:outline-none"
+                            />
+                            <button
+                              onClick={() => handleDefinirDataBase(d)}
+                              disabled={isPending}
+                              className="rounded bg-purple-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-purple-700 disabled:opacity-50"
+                            >
+                              Salvar
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Inline form: mapear codes descontinuados */}
+                      {formAberto[d.id] && d.acao_acionavel?.tipo === 'mapping_inline' && (
+                        <div className="mt-2 rounded-md border border-purple-200 bg-purple-50 p-2">
+                          <p className="text-[10px] font-medium text-purple-900">
+                            Mapeia code antigo → moderno
+                          </p>
+                          <p className="mt-0.5 text-[10px] text-zinc-700">
+                            Pra cada code que falhou, digita o equivalente moderno no banco.
+                            Deixa em branco os que não souber. Mesmo code (identity) sinaliza &quot;válido — retentar&quot;.
+                          </p>
+                          <div className="mt-1.5 space-y-1">
+                            {((d.acao_acionavel.params?.codes as Array<{ fonte_original: string; codigo_original: string; descricao?: string | null }> | undefined) ?? []).map((c) => {
+                              const key = `${c.fonte_original}/${c.codigo_original}`;
+                              return (
+                                <div key={key} className="flex items-center gap-1.5">
+                                  <code className="shrink-0 rounded bg-white px-1 py-0.5 text-[10px] text-purple-900" title={c.descricao ?? ''}>
+                                    {c.fonte_original}/{c.codigo_original}
+                                  </code>
+                                  <span className="text-[10px] text-zinc-500">→</span>
+                                  <input
+                                    type="text"
+                                    value={(mappingInput[d.id]?.[key]) ?? ''}
+                                    onChange={(e) => setMappingInput((prev) => ({
+                                      ...prev,
+                                      [d.id]: { ...(prev[d.id] ?? {}), [key]: e.target.value },
+                                    }))}
+                                    placeholder="código novo"
+                                    className="flex-1 rounded border border-purple-300 bg-white px-1.5 py-0.5 text-[10px] text-zinc-900 focus:border-purple-500 focus:outline-none"
+                                  />
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <div className="mt-1.5 flex gap-1.5">
+                            <button
+                              onClick={() => handleSalvarMapeamentos(d)}
+                              disabled={isPending}
+                              className="rounded bg-purple-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-purple-700 disabled:opacity-50"
+                            >
+                              Salvar todos
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}

@@ -90,9 +90,9 @@ function detectarCodesLegacy(ctx: ContextoAnalise): Diagnostico[] {
       'Mapeie cada code pra equivalente moderno em /dashboard/code-mappings. ' +
       'Próximos editais usam a substituição automaticamente.',
     acao_acionavel: {
-      tipo: 'abrir_mapeamentos',
-      params: {},
-      label: 'Abrir painel de mapeamento',
+      tipo: 'mapping_inline',
+      params: { codes: ctx.codesPendentes.slice(0, 20) },
+      label: '🔁 Mapear codes agora',
     },
     contexto: { codes: ctx.codesPendentes.slice(0, 10) },
   }];
@@ -130,14 +130,20 @@ function detectarDataBaseGenerica(ctx: ContextoAnalise): Diagnostico[] {
   if (!desc) {
     return [{
       tipo: 'data_base_ausente',
-      severidade: 'aviso',
+      severidade: 'erro',
       titulo: 'data_base_descricao ausente no cabecalho',
       mensagem:
         'Sem data-base, o agente usa o mês passado como fallback. ' +
-        'Codes do edital podem cair em versões erradas dos bancos e zerar preço.',
+        'Codes do edital podem cair em versões erradas dos bancos e zerar preço. ' +
+        'Causa comum de "código descontinuado" mesmo pra codes válidos.',
       sugestao:
-        'Re-extraia o JSON pedindo pro LLM incluir a data-base. ' +
-        'Ou edite manualmente o cabecalho na revisão.',
+        'Defina a data-base inline aqui (ex: "04/2026" ou "abril/2026"), ' +
+        'ou re-extraia o JSON do PDF pedindo pro LLM incluir a data-base.',
+      acao_acionavel: {
+        tipo: 'definir_data_base_inline',
+        params: {},
+        label: '📅 Definir data-base agora',
+      },
     }];
   }
   // Quando descrição menciona só 1 banco mas o edital usa múltiplos, alerta

@@ -132,8 +132,143 @@ export async function limparMyBaseIdsPropria(licitacaoId: string): Promise<AutoF
 }
 
 /**
- * AUTO-FIX 3: Despacha por tipo de diagnóstico.
+ * AUTO-FIX 3: Define data_base do edital quando ausente.
+ *
+ * Sem data_base_descricao, o Edge Function cadastrar-edital cai num fallback
+ * (mês atual) — codes do edital podem ficar em versão diferente do banco no
+ * Orçafascio e zerar preço ou retornar 500. Esse auto-fix permite o user
+ * digitar a data-base correta inline na UI do Cláudio sem voltar etapa
+ * inteira.
+ *
+ * Aceita formatos: "MM/AAAA", "fev/26", "fevereiro/2026", "JANEIRO/2026"
+ * — o cadastrar-edital normaliza no momento de uso (parseDataBase).
+ *
+ * Side effects:
+ *   - Atualiza licitacoes.data_base_descricao
+ *   - Atualiza extracoes_ocr.json_corrigido.cabecalho.data_base_descricao
+ *     (pra que próxima reanálise leia o valor novo do mesmo lugar)
+ */
+export async function definirDataBase(
+  licitacaoId: string,
+  dataBase: string,
+): Promise<AutoFixResult> {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { error: 'Não autenticado.' };
+  const valor = dataBase.trim();
+  if (!valor) return { error: 'Data-base vazia. Ex: "04/2026" ou "abril/2026".' };
+  // Validação leve: precisa ter dígitos
+  if (!/\d/.test(valor)) {
+    return { error: 'Data-base inválida. Use formato "MM/AAAA" ou "mês/ano".' };
+  }
+
+  const admin = createAdminClient();
+  // 1) licitacoes.data_base_descricao
+  const { error: e1 } = await admin
+    .from('licitacoes')
+    .update({ data_base_descricao: valor })
+    .eq('id', licitacaoId);
+  if (e1) return { error: `Falha ao salvar em licitacoes: ${e1.message}` };
+
+  // 2) extracoes_ocr.json_corrigido.cabecalho — só atualiza se existir
+  const { data: extr } = await admin
+    .from('extracoes_ocr')
+    .select('id, json_corrigido, json_extraido')
+    .eq('licitacao_id', licitacaoId)
+    .in('status', ['sucesso', 'revisada_humano'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (extr) {
+    const src = (extr.json_corrigido ?? extr.json_extraido) as Record<string, unknown> | null;
+    if (src && typeof src === 'object') {
+      const cabecalho = ((src.cabecalho as Record<string, unknown> | undefined) ?? {});
+      const novoJson = {
+        ...src,
+        cabecalho: { ...cabecalho, data_base_descricao: valor },
+      };
+      await admin
+        .from('extracoes_ocr')
+        .update({ json_corrigido: novoJson })
+        .eq('id', extr.id);
+    }
+  }
+
+  revalidatePath(`/licitacoes/${licitacaoId}`);
+  return {
+    ok: true,
+    mensagem: `Data-base setada pra "${valor}". Clique "🚀 Cadastrar tudo" pra re-rodar com a nova base.`,
+    mudancas: 1,
+  };
+}
+
+/**
+ * AUTO-FIX 4: Adiciona mapeamentos de codes descontinuados em batch.
+ *
+ * Recebe um array de {fonte_original, codigo_original, fonte_nova, codigo_novo}
+ * e popula a tabela orcafascio_code_mappings. Próxima rodada do cadastrar-edital
+ * aplica automaticamente.
+ *
+ * Identity mapping (codigo_novo == codigo_original) é permitido — funciona como
+ * "confirmar que esse code é válido, pode retentar". Útil quando o code é real
+ * mas Orçafascio falhou por outra razão (ex: data-base errada).
+ *
+ * Também limpa orcafascio_composition_id das composições que usavam esses codes,
+ * pra que o retry tente adicionar os items que tinham falhado.
+ */
+export async function salvarMapeamentosCodes(
+  licitacaoId: string,
+  mapeamentos: Array<{
+    fonte_original: string;
+    codigo_original: string;
+    fonte_nova?: string;
+    codigo_novo: string;
+    descricao?: string | null;
+  }>,
+): Promise<AutoFixResult> {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { error: 'Não autenticado.' };
+  if (!mapeamentos || mapeamentos.length === 0) {
+    return { error: 'Nenhum mapeamento fornecido.' };
+  }
+
+  const admin = createAdminClient();
+  const linhas = mapeamentos.map((m) => ({
+    fonte_original: m.fonte_original.toUpperCase(),
+    codigo_original: m.codigo_original,
+    fonte: (m.fonte_nova ?? m.fonte_original).toUpperCase(),
+    codigo: m.codigo_novo,
+    descricao: m.descricao ?? null,
+    motivo: 'Mapeamento adicionado via Cláudio (inline)',
+  }));
+
+  const { error } = await admin
+    .from('orcafascio_code_mappings')
+    .upsert(linhas, { onConflict: 'fonte_original,codigo_original' });
+  if (error) return { error: `Falha ao salvar mapeamentos: ${error.message}` };
+
+  // Limpa composition_ids das PROPRIA (próxima cadastrar-edital re-tenta)
+  await admin
+    .from('composicoes_extraidas')
+    .update({ orcafascio_composition_id: null })
+    .eq('licitacao_id', licitacaoId)
+    .eq('fonte', 'PROPRIA');
+
+  revalidatePath(`/licitacoes/${licitacaoId}`);
+  return {
+    ok: true,
+    mensagem: `${linhas.length} mapeamento(s) salvo(s). Clique "🚀 Cadastrar tudo" pra aplicar.`,
+    mudancas: linhas.length,
+  };
+}
+
+/**
+ * AUTO-FIX 5: Despacha por tipo de diagnóstico.
  * Cada `tipo` mapeia pra uma função específica.
+ *
+ * Auto-fixes com payload (data-base, mapeamentos) NÃO usam esse dispatcher —
+ * são chamados diretamente do componente UI pq precisam de input do user.
  */
 export async function executarAutoFix(
   licitacaoId: string,
