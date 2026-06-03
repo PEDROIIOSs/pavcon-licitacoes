@@ -303,10 +303,91 @@ Deno.serve(async (req: Request) => {
       if (m) return m[1].trim();
       return s.trim();
     }
+
+    // Recuperação resiliente do JSON do Gemini:
+    // 1) JSON.parse direto
+    // 2) jsonrepair (corrige aspas faltando, vírgulas finais, etc — comum em LLM)
+    // 3) Truncar ao último item válido em `itens: [...]` (fallback de emergência
+    //    — preserva o que deu pra extrair mesmo com syntax error no meio)
+    //
+    // Observação: o passo (3) é destrutivo (perde os items após o erro), mas
+    // 99% melhor que descartar tudo e exigir re-extração manual. Item que
+    // ficou trunco vira warning na metadata.extracao_warnings.
+    async function tentarParse(textOriginal: string): Promise<{
+      obj: unknown;
+      warnings: string[];
+    }> {
+      const cleaned = stripCodeFences(textOriginal);
+      const warnings: string[] = [];
+
+      // (1) Direto
+      try {
+        return { obj: JSON.parse(cleaned), warnings };
+      } catch (e1) {
+        warnings.push(
+          `JSON do Gemini não parseou direto (${e1 instanceof Error ? e1.message.slice(0, 120) : 'erro'}). Tentando jsonrepair…`,
+        );
+      }
+
+      // (2) jsonrepair
+      try {
+        const { jsonrepair } = await import('https://esm.sh/jsonrepair@3.12.0');
+        const repaired = jsonrepair(cleaned);
+        const obj = JSON.parse(repaired);
+        warnings.push('JSON recuperado via jsonrepair (havia vírgulas/aspas inconsistentes).');
+        return { obj, warnings };
+      } catch (e2) {
+        warnings.push(
+          `jsonrepair também falhou (${e2 instanceof Error ? e2.message.slice(0, 120) : 'erro'}). Tentando truncar ao último item válido…`,
+        );
+      }
+
+      // (3) Truncar manualmente ao último item válido
+      // Estratégia: localizar `"itens": [` e iterar fechando `]}` em cada
+      // posição de `}, {` até achar prefixo que valida.
+      const itensIdx = cleaned.indexOf('"itens"');
+      if (itensIdx === -1) {
+        throw new Error('JSON do Gemini sem "itens" — não dá pra recuperar nada.');
+      }
+      const arrStart = cleaned.indexOf('[', itensIdx);
+      if (arrStart === -1) {
+        throw new Error('JSON do Gemini sem array de itens — não dá pra recuperar.');
+      }
+      // Procura todos os candidatos `}, {` no array — cada um marca o fim de
+      // um item. Tenta do mais recente pro mais antigo até parsear OK.
+      const boundaries: number[] = [];
+      let pos = arrStart;
+      while (true) {
+        const next = cleaned.indexOf('},', pos + 1);
+        if (next === -1) break;
+        boundaries.push(next + 1); // posição depois do `}` (antes da vírgula)
+        pos = next;
+      }
+      // Tenta truncar e fechar como `]}`. Do último candidato pro primeiro.
+      for (let i = boundaries.length - 1; i >= 0; i--) {
+        const truncado = cleaned.slice(0, boundaries[i]) + ']}';
+        try {
+          const obj = JSON.parse(truncado);
+          warnings.push(
+            `JSON truncado ao último item válido (${boundaries.length - i} item(ns) perdidos a partir da posição ~${boundaries[i]}). Re-extraia o JSON se precisar do detalhamento completo dos últimos items.`,
+          );
+          return { obj, warnings };
+        } catch {
+          // tenta o anterior
+        }
+      }
+
+      throw new Error(
+        `JSON do Gemini totalmente irrecuperável após 3 tentativas. ` +
+        `Início: ${cleaned.slice(0, 200)}`,
+      );
+    }
+
     let parsed: ExtractedJson;
+    const extracaoWarnings: string[] = [];
     try {
-      const cleaned = stripCodeFences(result.text!);
-      const obj = JSON.parse(cleaned);
+      const { obj, warnings } = await tentarParse(result.text!);
+      extracaoWarnings.push(...warnings);
       parsed = validateExtractedJson(obj);
     } catch (parseErr) {
       const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
@@ -409,6 +490,13 @@ Deno.serve(async (req: Request) => {
     await admin.from('licitacoes').update({ status: 'extracao_concluida' }).eq('id', licitacaoId);
     await admin.from('licitacoes').update({ status: 'aguardando_revisao_humana' }).eq('id', licitacaoId);
 
+    // Persiste warnings de recuperação no erro_detalhe (pra reanálise/auditoria)
+    if (extracaoWarnings.length > 0 && extracaoId) {
+      await admin.from('extracoes_ocr').update({
+        erro_detalhe: `[recuperação] ${extracaoWarnings.join(' | ')}`,
+      }).eq('id', extracaoId);
+    }
+
     return jsonResponse({
       extracao_id: extracaoId,
       licitacao_id: licitacaoId,
@@ -418,6 +506,7 @@ Deno.serve(async (req: Request) => {
       tokens_output: result.usage.candidatesTokenCount ?? null,
       custo_usd: result.estimatedCostUsd,
       duracao_ms: duracaoMs,
+      warnings: extracaoWarnings,
       trace_id: traceId,
     });
   } catch (err) {

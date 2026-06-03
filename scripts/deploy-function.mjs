@@ -80,6 +80,18 @@ function collect(filePath, srcText) {
 const indexSrc = readFileSync(indexPath, 'utf8');
 collect(indexPath, indexSrc);
 
+// Sibling local files no MESMO dir da função (ex: prompt.ts, schema.ts).
+// Pra essas, mantém path relativo `./X.ts` e anexa no upload.
+const localSiblings = new Map(); // 'X.ts' -> { src }
+const LOCAL_SIBLING_RE = /from\s+['"]\.\/([^'"\/][^'"]*)['"]/g;
+const indexSiblings = [...indexSrc.matchAll(LOCAL_SIBLING_RE)].map((m) => m[1]);
+for (const sib of indexSiblings) {
+  const p = join(slugDir, sib);
+  if (existsSync(p)) {
+    localSiblings.set(sib, { src: readFileSync(p, 'utf8') });
+  }
+}
+
 // Reescreve imports do entry: `../_shared/X.ts` → `./_shared/X.ts`
 const indexRewritten = indexSrc.replace(SHARED_FROM_OUTSIDE_RE, (_m, name) => {
   return `from './_shared/${name}'`;
@@ -88,6 +100,9 @@ const indexRewritten = indexSrc.replace(SHARED_FROM_OUTSIDE_RE, (_m, name) => {
 console.log(`[deploy] slug=${slug}`);
 console.log(`[deploy] index.ts (${indexRewritten.length} bytes)`);
 console.log(`[deploy] _shared deps (${sharedCache.size}): ${[...sharedCache.keys()].join(', ')}`);
+if (localSiblings.size > 0) {
+  console.log(`[deploy] local siblings (${localSiblings.size}): ${[...localSiblings.keys()].join(', ')}`);
+}
 
 // =============================================================================
 // Monta FormData multipart
@@ -103,6 +118,9 @@ form.append('metadata', JSON.stringify(metadata));
 form.append('file', new Blob([indexRewritten], { type: 'application/typescript' }), 'index.ts');
 for (const [rel, { rewritten }] of sharedCache.entries()) {
   form.append('file', new Blob([rewritten], { type: 'application/typescript' }), rel);
+}
+for (const [sib, { src }] of localSiblings.entries()) {
+  form.append('file', new Blob([src], { type: 'application/typescript' }), sib);
 }
 
 const url = `https://api.supabase.com/v1/projects/${PROJECT_REF}/functions/deploy?slug=${slug}`;
