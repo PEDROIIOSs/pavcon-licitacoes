@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /* =============================================================================
- * Identidade visual PavCon Construtora — paleta oficial extraída da logo.
+ * Identidade visual Pavcon Construtora — paleta oficial extraída da logo.
  * Usado como `bg-pavcon-navy`, `text-pavcon-orange`, etc. via Tailwind v4
  * theme tokens (@theme inline + --color-* abaixo).
  * Manter sincronizado com 04 - MANUAL da marca.
@@ -10,7 +10,7 @@
   --background: #ffffff;
   --foreground: #171717;
 
-  /* Paleta institucional PavCon */
+  /* Paleta institucional Pavcon */
   --pavcon-navy: #084088;       /* azul institucional — primary */
   --pavcon-navy-dark: #052f63;
   --pavcon-navy-light: #1a5ab0;

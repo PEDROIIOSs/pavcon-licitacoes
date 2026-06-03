@@ -17,11 +17,11 @@ export default async function LoginPage({
   return (
     <main className="flex min-h-screen items-center justify-center bg-gradient-to-br from-pavcon-navy-50 via-white to-pavcon-orange-50 px-4 py-10">
       <div className="w-full max-w-md">
-        {/* Logo PavCon acima do card */}
+        {/* Logo Pavcon acima do card */}
         <div className="mb-6 flex justify-center">
           <Image
             src="/brand/pavcon-horizontal.jpg"
-            alt="PavCon Construtora"
+            alt="Pavcon Construtora"
             width={224}
             height={58}
             priority
@@ -42,7 +42,7 @@ export default async function LoginPage({
             Bem-vindo
           </h1>
           <p className="mt-1 text-center text-sm text-zinc-500">
-            Plataforma de automação de orçamentos da PavCon Construtora.
+            Plataforma de automação de orçamentos da Pavcon Construtora.
           </p>
 
           {params.reset_sent && (
@@ -65,7 +65,7 @@ export default async function LoginPage({
         </div>
 
         <p className="mt-6 text-center text-[11px] text-zinc-500">
-          © {new Date().getFullYear()} PavCon Construtora · Todos os direitos reservados
+          © {new Date().getFullYear()} Pavcon Construtora · Todos os direitos reservados
         </p>
       </div>
     </main>

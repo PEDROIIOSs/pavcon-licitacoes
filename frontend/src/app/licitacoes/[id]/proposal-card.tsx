@@ -60,7 +60,7 @@ export function ProposalCard({
   );
   // Modo de cálculo: 'desconto' usa % sobre custos NÃO-MO (regra padrão).
   // 'valor_alvo' permite o orçamentista digitar diretamente o valor final
-  // que quer pra proposta — útil quando o cálculo MO-aware do PavCon não
+  // que quer pra proposta — útil quando o cálculo MO-aware do Pavcon não
   // bate com o esperado (ex: orçamento base com valor abaixo do real, codes
   // descontinuados, etc.) e ele quer forçar um número específico.
   const [modo, setModo] = useState<'desconto' | 'valor_alvo'>('desconto');

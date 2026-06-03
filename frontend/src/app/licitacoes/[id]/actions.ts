@@ -1147,7 +1147,7 @@ export async function cadastrarPropostaOrcafascio(
   /** Valor alvo direto da proposta (em reais, COM BDI). Se passado, sobrescreve
    * o cálculo MO-aware e o Orçafascio aplica ajustarValor exatamente nesse
    * número. Útil quando o orçamentista já sabe o valor que quer (ex: porque
-   * o cálculo PavCon não confere com o esperado, ou ele quer testar). */
+   * o cálculo Pavcon não confere com o esperado, ou ele quer testar). */
   valorAlvoDireto?: number,
 ): Promise<{
   ok?: boolean;

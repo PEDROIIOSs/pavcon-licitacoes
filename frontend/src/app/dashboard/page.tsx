@@ -73,14 +73,14 @@ export default async function DashboardPage({
   return (
     <div className="min-h-screen">
       <header className="border-b border-zinc-200 bg-white shadow-sm">
-        {/* Faixa fina navy no topo — identidade da marca PavCon */}
+        {/* Faixa fina navy no topo — identidade da marca Pavcon */}
         <div className="h-1 w-full bg-gradient-to-r from-pavcon-navy via-pavcon-navy-light to-pavcon-orange" />
         <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-3">
           <div className="flex items-center gap-4">
             <Link href="/dashboard" className="flex items-center gap-3">
               <Image
                 src="/brand/pavcon-horizontal.jpg"
-                alt="PavCon Construtora"
+                alt="Pavcon Construtora"
                 width={140}
                 height={36}
                 priority

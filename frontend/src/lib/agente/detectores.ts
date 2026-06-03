@@ -41,7 +41,7 @@ export interface ContextoAnalise {
       total_itens_batch?: number;
     } | null;
   };
-  /** Total dos itens 'servico' somados (do banco PavCon). */
+  /** Total dos itens 'servico' somados (do banco Pavcon). */
   totalExtraidoServicos?: number;
   /** Total atual do orçamento no Orçafascio (lido via API ou cache). */
   totalOrcamentoOrcafascio?: number | null;
