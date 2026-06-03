@@ -332,9 +332,32 @@ export function ProposalCard({
 
       {cadastroResult && (
         <div className="space-y-2 rounded-md border border-purple-300 bg-purple-50 p-4 text-sm">
-          <p className="font-semibold text-purple-900">
-            ✅ Proposta cadastrada no Orçafascio!
-          </p>
+          {/* Detecta se o link tá com problema de abertura no Orçafascio */}
+          {(() => {
+            const warnings = cadastroResult.warnings ?? [];
+            const linkProblematico = warnings.some((w) =>
+              /retornou erros|UI=\d{3}|fantasma|corrompido|race condition|500/i.test(w)
+            );
+            if (linkProblematico) {
+              return (
+                <>
+                  <p className="font-semibold text-red-900">
+                    ⚠ Proposta criada MAS link pode estar com erro 500 do Orçafascio
+                  </p>
+                  <p className="text-xs text-red-800">
+                    O budget foi gerado no servidor deles (vimos pelo log da API), mas a UI
+                    do Orçafascio retornou 500 ao tentar abrir. É bug do servidor deles,
+                    intermitente.
+                  </p>
+                </>
+              );
+            }
+            return (
+              <p className="font-semibold text-purple-900">
+                ✅ Proposta cadastrada no Orçafascio!
+              </p>
+            );
+          })()}
           {cadastroResult.budget_url && (
             <a
               href={cadastroResult.budget_url}
@@ -350,6 +373,51 @@ export function ProposalCard({
               Valor aplicado: <strong>{formatBRL(cadastroResult.valor_aplicado)}</strong>
             </p>
           )}
+
+          {/* Se tem link problemático, mostra botão de retry */}
+          {(cadastroResult.warnings ?? []).some((w) => /retornou erros|UI=\d{3}|fantasma|corrompido|500/i.test(w)) && (
+            <div className="rounded-md border border-red-200 bg-red-50 p-3 text-xs">
+              <p className="font-medium text-red-900">Como resolver:</p>
+              <ol className="mt-1 ml-4 list-decimal space-y-0.5 text-red-800">
+                <li>
+                  <strong>Tenta abrir o link você</strong> — às vezes funciona depois de uns segundos
+                  (bug intermitente do Orçafascio).
+                </li>
+                <li>
+                  Se não abrir, apague o orçamento{' '}
+                  <code className="rounded bg-white px-1 text-[10px]">
+                    {cadastroResult.budget_id?.slice(0, 12)}…
+                  </code>{' '}
+                  manualmente no Orçafascio (vai na lixeira).
+                </li>
+                <li>
+                  Volta aqui e clica <strong>"🔄 Limpar e refazer"</strong> abaixo —
+                  novo budget vai ser criado.
+                </li>
+                <li>
+                  Se persistir após 2-3 tentativas, tenta usar{' '}
+                  <strong>R$ Valor alvo direto</strong> com valor arredondado (ex:{' '}
+                  <code className="rounded bg-white px-1 text-[10px]">360000</code>) — o
+                  bug parece pior com decimais.
+                </li>
+              </ol>
+              <button
+                onClick={() => {
+                  if (confirm(
+                    'Limpar o budget_id desta proposta no nosso sistema?\n\n' +
+                    'IMPORTANTE: você precisa apagar manualmente o orçamento no Orçafascio antes — senão fica orçamento órfão.\n\nContinuar?'
+                  )) {
+                    // limpa local — vai trigger re-render e habilitar "Cadastrar" de novo
+                    setCadastroResult(null);
+                  }
+                }}
+                className="mt-2 rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700"
+              >
+                🔄 Limpar e refazer
+              </button>
+            </div>
+          )}
+
           <p className="rounded bg-amber-50 p-2 text-[11px] text-amber-900">
             ⚠ Atenção: o Orçafascio aplicou o ajuste de forma <strong>linear</strong> em
             todos os itens. O <strong>total bate</strong> com nosso cálculo MO-aware,
