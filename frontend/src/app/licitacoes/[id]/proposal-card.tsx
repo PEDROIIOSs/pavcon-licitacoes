@@ -65,6 +65,11 @@ export function ProposalCard({
   // descontinuados, etc.) e ele quer forçar um número específico.
   const [modo, setModo] = useState<'desconto' | 'valor_alvo'>('desconto');
   const [valorAlvoStr, setValorAlvoStr] = useState<string>('');
+  // WORKAROUND do bug Orçafascio: quando true, pula ajustarValor (que
+  // corrompe o budget às vezes). Backend só copia o base. User aplica
+  // desconto manualmente na UI do Orçafascio (30s de cliques) MAS o link
+  // funciona — não dá 500.
+  const [pularAjustar, setPularAjustar] = useState<boolean>(false);
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CalcResult | null>(null);
@@ -120,6 +125,7 @@ export function ProposalCard({
         licitacaoId,
         descontoValido ? desconto : 1, // desconto é obrigatório no backend mesmo quando temos valor alvo
         modo === 'valor_alvo' ? valorAlvo : undefined,
+        pularAjustar,
       );
       if (r.error) {
         setError(r.error);
@@ -289,6 +295,31 @@ export function ProposalCard({
         <div className="rounded-md bg-red-50 p-3 text-sm text-red-800">{error}</div>
       )}
 
+      {/* Checkbox do workaround */}
+      <label className={`flex items-start gap-2 rounded-md border p-3 text-xs cursor-pointer transition ${
+        pularAjustar
+          ? 'border-emerald-300 bg-emerald-50'
+          : 'border-amber-300 bg-amber-50 hover:bg-amber-100'
+      }`}>
+        <input
+          type="checkbox"
+          checked={pularAjustar}
+          onChange={(e) => setPularAjustar(e.target.checked)}
+          disabled={isPending}
+          className="mt-0.5 h-4 w-4 cursor-pointer accent-emerald-600"
+        />
+        <div>
+          <p className={`font-semibold ${pularAjustar ? 'text-emerald-900' : 'text-amber-900'}`}>
+            🛡 Modo seguro — não chamar ajustarValor (recomendado se está dando 500)
+          </p>
+          <p className={`mt-0.5 ${pularAjustar ? 'text-emerald-800' : 'text-amber-800'}`}>
+            {pularAjustar
+              ? '✓ Backend só vai COPIAR o base. Você aplica o desconto manualmente no Orçafascio em "Editar → Ajustar valor". ~30s a mais, mas SEM o bug do 500.'
+              : 'Marque se o link da proposta está dando erro 500 no Orçafascio (bug intermitente do servidor deles).'}
+          </p>
+        </div>
+      </label>
+
       <div className="flex flex-wrap items-center gap-2">
         {modo === 'desconto' && (
           <>
@@ -326,7 +357,7 @@ export function ProposalCard({
                 : 'Copia o orçamento base + aplica "ajustar valor" (linear)'
           }
         >
-          🚀 Cadastrar no Orçafascio
+          {pularAjustar ? '🛡 Cadastrar (modo seguro — sem ajustar)' : '🚀 Cadastrar no Orçafascio'}
         </button>
       </div>
 

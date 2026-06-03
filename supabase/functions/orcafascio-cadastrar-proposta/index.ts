@@ -44,6 +44,11 @@ interface RequestBody {
   /** Valor final desejado pra proposta (com BDI). Pré-calculado pelo
    * backend respeitando regra de MO. Se omitido, a Edge Function calcula. */
   valor_proposta?: number;
+  /** WORKAROUND do bug Orçafascio: pula a chamada ajustarValor que corrompe
+   * o budget novo (500 ao abrir). Quando true, só copia o budget base sem
+   * aplicar o ajuste — o orçamentista aplica o desconto manualmente na UI
+   * do Orçafascio. Mais cliques mas funciona 100%. */
+  skip_ajustar_valor?: boolean;
   trace_id?: string;
 }
 
@@ -162,17 +167,30 @@ Deno.serve(async (req: Request) => {
     // na maioria dos casos.
     await new Promise((r) => setTimeout(r, 2000));
 
-    // ---- 5) Aplica ajustar_valor -------------------------------------------
+    // ---- 5) Aplica ajustar_valor (a menos que skip_ajustar_valor) -----------
     // O Orçafascio aplica o fator linear sobre TODOS os itens pra alcançar
     // exatamente o `valorProposta`. Como esse valor já respeita a regra de
     // MO (calculado no backend), o resultado total bate, embora a divisão
     // interna fique linear.
+    //
+    // BUG conhecido (jun/2026): ajustarValor às vezes corrompe internamente
+    // o budget e a UI do Orçafascio retorna 500 ao abrir. Quando o user
+    // escolhe skip_ajustar_valor=true, pulamos esta chamada — budget fica
+    // com o valor TOTAL do base, e o user ajusta manualmente.
+    if (body.skip_ajustar_valor === true) {
+      warnings.push(
+        `ajustarValor PULADO (skip_ajustar_valor=true). Orçamento copiado ` +
+        `com valor do base. Aplique o desconto manualmente no Orçafascio ` +
+        `usando "Ajustar valor" da UI (mais confiável que via API).`,
+      );
+    } else {
     try {
       await ajustarValor(ctx, novoBudgetId, valorProposta);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       warnings.push(`ajustarValor falhou: ${msg.slice(0, 200)} — orçamento copiado mas sem desconto aplicado`);
     }
+    } // fim do if (skip_ajustar_valor)
 
     // ---- 5.5) Verificação pós-cadastro: confirma que o orçamento existe ----
     // Bug observado (NOVO ORIENTE 001 - 03/06/2026): copyBudget + ajustarValor

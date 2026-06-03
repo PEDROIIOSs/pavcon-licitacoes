@@ -1324,6 +1324,11 @@ export async function cadastrarPropostaOrcafascio(
    * número. Útil quando o orçamentista já sabe o valor que quer (ex: porque
    * o cálculo Pavcon não confere com o esperado, ou ele quer testar). */
   valorAlvoDireto?: number,
+  /** WORKAROUND do bug Orçafascio: quando true, pula a chamada ajustarValor
+   * (que corrompe o budget às vezes). Backend só copia o budget base.
+   * O user aplica desconto manualmente no Orçafascio. Mais cliques mas
+   * funciona 100%. */
+  pularAjustarValor?: boolean,
 ): Promise<{
   ok?: boolean;
   error?: string;
@@ -1373,6 +1378,7 @@ export async function cadastrarPropostaOrcafascio(
       credential_id: cred.id,
       desconto_percentual: descontoPercentual,
       valor_proposta: valorPropostaFinal,
+      skip_ajustar_valor: pularAjustarValor === true,
     }),
   });
   const text = await res.text();
