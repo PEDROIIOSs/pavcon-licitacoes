@@ -288,7 +288,7 @@ export function FloatingClaudio({ licitacaoId }: Props) {
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-600 text-white">
                   <ClaudioAvatar size={18} />
                 </div>
-                <div className="max-w-[80%] rounded-2xl rounded-tl-sm bg-white p-3 text-xs text-zinc-700 shadow-sm">
+                <div className="max-w-[80%] rounded-2xl rounded-tl-sm bg-white p-3 text-xs text-zinc-900 shadow-sm">
                   {carregando ? (
                     <p>Analisando a licitação… 🔍</p>
                   ) : diagnosticos.length === 0 ? (
@@ -317,8 +317,8 @@ export function FloatingClaudio({ licitacaoId }: Props) {
                         <span className={`mt-1.5 inline-block h-2 w-2 shrink-0 rounded-full ${sev.dot}`} />
                         <div className="min-w-0 flex-1">
                           <p className="font-semibold text-zinc-900">{d.titulo}</p>
-                          {d.mensagem && <p className="mt-1 text-[11px] text-zinc-600">{d.mensagem}</p>}
-                          {d.sugestao && <p className="mt-1.5 rounded bg-zinc-50 p-1.5 text-[11px] text-zinc-700">💡 {d.sugestao}</p>}
+                          {d.mensagem && <p className="mt-1 text-[11px] text-zinc-900">{d.mensagem}</p>}
+                          {d.sugestao && <p className="mt-1.5 rounded bg-zinc-50 p-1.5 text-[11px] text-zinc-900">💡 {d.sugestao}</p>}
                         </div>
                       </div>
                       <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-zinc-100 pt-2">
@@ -372,7 +372,7 @@ export function FloatingClaudio({ licitacaoId }: Props) {
                     <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-600 text-white">
                       <ClaudioAvatar size={18} />
                     </div>
-                    <div className="max-w-[80%] rounded-2xl rounded-tl-sm bg-white p-3 text-xs text-zinc-700 shadow-sm">
+                    <div className="max-w-[80%] rounded-2xl rounded-tl-sm bg-white p-3 text-xs text-zinc-900 shadow-sm">
                       <p>
                         Pode mandar a pergunta! 🤖<br />
                         Exemplos:<br />
@@ -396,7 +396,7 @@ export function FloatingClaudio({ licitacaoId }: Props) {
                       className={`max-w-[80%] whitespace-pre-wrap rounded-2xl p-3 text-xs shadow-sm ${
                         m.role === 'user'
                           ? 'rounded-tr-sm bg-purple-600 text-white'
-                          : 'rounded-tl-sm bg-white text-zinc-700'
+                          : 'rounded-tl-sm bg-white text-zinc-900'
                       }`}
                     >
                       {m.content}
