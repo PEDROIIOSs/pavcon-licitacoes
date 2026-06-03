@@ -158,6 +158,14 @@ export function UploadForm() {
         }
         // Sucesso → action faz redirect; nada mais aqui
       } catch (e) {
+        // Server Actions com redirect() lançam um erro especial cujo digest
+        // começa com 'NEXT_REDIRECT'. Esse erro PRECISA chegar até o framework
+        // do Next pra a navegação acontecer — se o catch swallowar, o user vê
+        // "Erro inesperado: NEXT_REDIRECT" e fica preso na tela. Re-throw.
+        const digest = (e as { digest?: unknown })?.digest;
+        if (typeof digest === 'string' && digest.startsWith('NEXT_REDIRECT')) {
+          throw e;
+        }
         setError(`Erro inesperado: ${e instanceof Error ? e.message : String(e)}`);
         setProgress(null);
       }
