@@ -240,7 +240,7 @@ export async function salvarMapeamentosCodes(
     fonte: (m.fonte_nova ?? m.fonte_original).toUpperCase(),
     codigo: m.codigo_novo,
     descricao: m.descricao ?? null,
-    motivo: 'Mapeamento adicionado via Cláudio (inline)',
+    motivo: 'Mapeamento adicionado via OrçaPav AI (inline)',
   }));
 
   const { error } = await admin
@@ -346,6 +346,6 @@ export async function executarAutoFix(
     case 'aplicar_mapeamentos_pendentes':
       return limparMyBaseIdsPropria(licitacaoId);
     default:
-      return { error: `Auto-fix "${tipo}" não implementado ainda. Cláudio precisa de uma resolução manual.` };
+      return { error: `Auto-fix "${tipo}" não implementado ainda. OrçaPav AI precisa de uma resolução manual.` };
   }
 }

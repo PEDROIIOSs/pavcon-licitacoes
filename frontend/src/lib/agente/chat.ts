@@ -93,7 +93,7 @@ export async function chatComClaudio(
     });
     const data = await res.json();
     if (!res.ok) {
-      return { error: `Cláudio falhou (${res.status}): ${data?.error ?? 'erro desconhecido'}` };
+      return { error: `OrçaPav AI falhou (${res.status}): ${data?.error ?? 'erro desconhecido'}` };
     }
     revalidatePath(`/licitacoes/${licitacaoId}`);
     return data as ChatResultado;

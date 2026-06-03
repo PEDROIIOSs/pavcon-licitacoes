@@ -1144,6 +1144,11 @@ export async function calcularProposta(
 export async function cadastrarPropostaOrcafascio(
   licitacaoId: string,
   descontoPercentual: number,
+  /** Valor alvo direto da proposta (em reais, COM BDI). Se passado, sobrescreve
+   * o cálculo MO-aware e o Orçafascio aplica ajustarValor exatamente nesse
+   * número. Útil quando o orçamentista já sabe o valor que quer (ex: porque
+   * o cálculo PavCon não confere com o esperado, ou ele quer testar). */
+  valorAlvoDireto?: number,
 ): Promise<{
   ok?: boolean;
   error?: string;
@@ -1156,9 +1161,16 @@ export async function cadastrarPropostaOrcafascio(
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) return { error: 'Não autenticado.' };
 
-  // 1) Calcula a proposta com regra MO (idempotente — pode rodar de novo)
-  const proposta = await calcularProposta(licitacaoId, descontoPercentual);
-  if (proposta.error) return { error: `Falha no cálculo MO: ${proposta.error}` };
+  // 1) Calcula a proposta com regra MO (idempotente — pode rodar de novo).
+  // SE veio valor alvo direto, ele tem prioridade sobre o cálculo.
+  let valorPropostaFinal: number;
+  if (Number.isFinite(valorAlvoDireto) && (valorAlvoDireto as number) > 0) {
+    valorPropostaFinal = valorAlvoDireto as number;
+  } else {
+    const proposta = await calcularProposta(licitacaoId, descontoPercentual);
+    if (proposta.error) return { error: `Falha no cálculo MO: ${proposta.error}` };
+    valorPropostaFinal = (proposta as { total_proposta_com_bdi: number }).total_proposta_com_bdi;
+  }
 
   // 2) Pega credencial WEB
   const { data: creds } = await supabase
@@ -1185,7 +1197,7 @@ export async function cadastrarPropostaOrcafascio(
       licitacao_id: licitacaoId,
       credential_id: cred.id,
       desconto_percentual: descontoPercentual,
-      valor_proposta: proposta.total_proposta_com_bdi,
+      valor_proposta: valorPropostaFinal,
     }),
   });
   const text = await res.text();

@@ -32,7 +32,7 @@ interface Props {
 
 const AUTO_FIX_DISPONIVEL: Record<string, { label: string; descricao: string }> = {
   codes_adaptados_nao_reclassificados: {
-    label: '🤖 Cláudio resolver agora',
+    label: '🤖 OrçaPav AI resolver agora',
     descricao: 'Reclassifica esses items pra PROPRIA automaticamente',
   },
   aplicar_mapeamentos_pendentes: {
@@ -136,7 +136,7 @@ export function FloatingClaudio({ licitacaoId }: Props) {
       const r = await executarAutoFix(licitacaoId, diag.tipo);
       if (r.error) setErro(r.error);
       else {
-        setSucesso(r.mensagem ?? `Cláudio aplicou ${r.mudancas ?? 0} mudança(s).`);
+        setSucesso(r.mensagem ?? `OrçaPav AI aplicou ${r.mudancas ?? 0} mudança(s).`);
         const ar = await analisarLicitacao(licitacaoId);
         if (ar.diagnosticos) setDiagnosticos(ar.diagnosticos as Diagnostico[]);
       }
@@ -289,10 +289,10 @@ export function FloatingClaudio({ licitacaoId }: Props) {
           className="fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-purple-600 text-white shadow-lg ring-4 ring-purple-200 transition hover:scale-110 hover:bg-purple-700"
           title={
             temPendencia
-              ? `${totalErros} erro(s), ${totalAvisos} aviso(s) — clique pra abrir o Cláudio`
-              : 'Cláudio — assistente de orçamentos'
+              ? `${totalErros} erro(s), ${totalAvisos} aviso(s) — clique pra abrir o OrçaPav AI`
+              : 'OrçaPav AI — assistente de orçamentos'
           }
-          aria-label="Abrir Cláudio"
+          aria-label="Abrir OrçaPav AI"
         >
           <ClaudioAvatar size={32} />
           {temPendencia && (
@@ -312,7 +312,7 @@ export function FloatingClaudio({ licitacaoId }: Props) {
                 <ClaudioAvatar size={24} />
               </div>
               <div>
-                <h2 className="text-sm font-semibold">Cláudio</h2>
+                <h2 className="text-sm font-semibold">OrçaPav AI</h2>
                 <p className="text-[10px] opacity-80">Assistente de orçamentos</p>
               </div>
             </div>
@@ -599,7 +599,7 @@ export function FloatingClaudio({ licitacaoId }: Props) {
                         <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-purple-400" style={{ animationDelay: '0.2s' }} />
                         <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-purple-400" style={{ animationDelay: '0.4s' }} />
                       </span>
-                      <span className="ml-2">Cláudio está pensando…</span>
+                      <span className="ml-2">OrçaPav AI está pensando…</span>
                     </div>
                   </div>
                 )}
@@ -621,7 +621,7 @@ export function FloatingClaudio({ licitacaoId }: Props) {
                         enviarPergunta();
                       }
                     }}
-                    placeholder="Pergunte pro Cláudio… (Enter envia, Shift+Enter quebra linha)"
+                    placeholder="Pergunte pro OrçaPav AI… (Enter envia, Shift+Enter quebra linha)"
                     disabled={chatPensando}
                     rows={2}
                     className="flex-1 resize-none rounded border border-zinc-300 px-2 py-1.5 text-xs focus:border-purple-500 focus:outline-none disabled:bg-zinc-50"
@@ -639,7 +639,7 @@ export function FloatingClaudio({ licitacaoId }: Props) {
           )}
 
           <footer className="border-t border-zinc-200 bg-white px-3 py-2 text-[10px] text-zinc-500">
-            🔒 Cláudio atua só nesta licitação. Quando você marca &quot;Resolvi&quot;, ele aprende.
+            🔒 OrçaPav AI atua só nesta licitação. Quando você marca &quot;Resolvi&quot;, ele aprende.
           </footer>
         </aside>
       )}

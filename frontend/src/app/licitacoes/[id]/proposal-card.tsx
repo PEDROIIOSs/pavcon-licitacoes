@@ -58,6 +58,13 @@ export function ProposalCard({
       ? proposta.desconto_percentual.toString()
       : '10',
   );
+  // Modo de cálculo: 'desconto' usa % sobre custos NÃO-MO (regra padrão).
+  // 'valor_alvo' permite o orçamentista digitar diretamente o valor final
+  // que quer pra proposta — útil quando o cálculo MO-aware do PavCon não
+  // bate com o esperado (ex: orçamento base com valor abaixo do real, codes
+  // descontinuados, etc.) e ele quer forçar um número específico.
+  const [modo, setModo] = useState<'desconto' | 'valor_alvo'>('desconto');
+  const [valorAlvoStr, setValorAlvoStr] = useState<string>('');
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CalcResult | null>(null);
@@ -71,6 +78,8 @@ export function ProposalCard({
 
   const desconto = Number(descontoStr.replace(',', '.'));
   const descontoValido = Number.isFinite(desconto) && desconto > 0 && desconto < 100;
+  const valorAlvo = Number(valorAlvoStr.replace(/[^\d,\.]/g, '').replace(',', '.'));
+  const valorAlvoValido = Number.isFinite(valorAlvo) && valorAlvo > 0;
 
   function handleCalc() {
     if (!descontoValido) return;
@@ -88,16 +97,18 @@ export function ProposalCard({
   }
 
   function handleCadastrarOrcafascio() {
-    if (!descontoValido) return;
+    if (modo === 'desconto' && !descontoValido) return;
+    if (modo === 'valor_alvo' && !valorAlvoValido) return;
     if (!orcamentoBaseId) {
       setError(
         'Orçamento base não encontrado no Orçafascio. Cadastre o orçamento base primeiro ou re-rode o Passo 2.',
       );
       return;
     }
+    const alvo = modo === 'valor_alvo' ? valorAlvo : result?.total_proposta_com_bdi;
     if (
       !confirm(
-        `Cadastrar proposta no Orçafascio?\n\nIsso vai:\n• COPIAR o orçamento base no Orçafascio\n• Aplicar "ajustar valor" pra bater R$ ${result?.total_proposta_com_bdi.toFixed(2) ?? '???'}\n\nOBSERVAÇÃO: o Orçafascio aplica o ajuste de forma LINEAR (proporcional em todos itens, inclusive MO). O total final bate com o nosso cálculo MO-aware, mas a divisão interna por item segue o ajuste linear. Pra auditoria detalhada, use o CSV baixado.\n\nContinuar?`,
+        `Cadastrar proposta no Orçafascio?\n\nIsso vai:\n• COPIAR o orçamento base no Orçafascio\n• Aplicar "ajustar valor" pra bater R$ ${alvo?.toFixed(2) ?? '???'}\n\n${modo === 'valor_alvo' ? 'MODO "Valor alvo direto": você digitou o valor explicitamente — vamos forçar exatamente esse total. Cálculo MO-aware ignorado.\n\n' : ''}OBSERVAÇÃO: o Orçafascio aplica o ajuste de forma LINEAR (proporcional em todos itens, inclusive MO). O total final bate com o valor escolhido, mas a divisão interna por item segue o ajuste linear. Pra auditoria detalhada, use o CSV baixado.\n\nContinuar?`,
       )
     ) {
       return;
@@ -105,7 +116,11 @@ export function ProposalCard({
     setError(null);
     setCadastroResult(null);
     startTransition(async () => {
-      const r = await cadastrarPropostaOrcafascio(licitacaoId, desconto);
+      const r = await cadastrarPropostaOrcafascio(
+        licitacaoId,
+        descontoValido ? desconto : 1, // desconto é obrigatório no backend mesmo quando temos valor alvo
+        modo === 'valor_alvo' ? valorAlvo : undefined,
+      );
       if (r.error) {
         setError(r.error);
       } else {
@@ -163,6 +178,33 @@ export function ProposalCard({
         </p>
       </div>
 
+      {/* Toggle de modo: desconto vs valor direto */}
+      <div className="flex items-center gap-2 rounded-md border border-amber-200 bg-white p-2">
+        <span className="text-xs font-medium text-zinc-700">Modo:</span>
+        <button
+          onClick={() => setModo('desconto')}
+          disabled={isPending}
+          className={`rounded-md px-3 py-1 text-xs font-medium transition ${
+            modo === 'desconto'
+              ? 'bg-amber-600 text-white'
+              : 'border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50'
+          } disabled:opacity-50`}
+        >
+          % Desconto (regra MO)
+        </button>
+        <button
+          onClick={() => setModo('valor_alvo')}
+          disabled={isPending}
+          className={`rounded-md px-3 py-1 text-xs font-medium transition ${
+            modo === 'valor_alvo'
+              ? 'bg-amber-600 text-white'
+              : 'border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50'
+          } disabled:opacity-50`}
+        >
+          R$ Valor alvo direto
+        </button>
+      </div>
+
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <div className="rounded-md border border-amber-200 bg-white p-3">
           <p className="text-[11px] uppercase tracking-wide text-zinc-500">
@@ -174,38 +216,70 @@ export function ProposalCard({
           <p className="text-[11px] text-zinc-500">BDI: {bdiEdital.toFixed(2)}%</p>
         </div>
 
-        <div className="rounded-md border border-amber-200 bg-white p-3">
-          <p className="text-[11px] uppercase tracking-wide text-zinc-500">
-            Desconto pretendido
-          </p>
-          <div className="mt-1 flex items-baseline gap-1">
-            <input
-              type="number"
-              min="0.01"
-              max="99.99"
-              step="0.01"
-              value={descontoStr}
-              onChange={(e) => setDescontoStr(e.target.value)}
-              disabled={isPending}
-              className="w-20 rounded border border-zinc-300 px-2 py-1 text-lg font-semibold focus:border-amber-500 focus:outline-none disabled:opacity-50"
-            />
-            <span className="text-lg font-semibold text-zinc-900">%</span>
+        {modo === 'desconto' ? (
+          <div className="rounded-md border border-amber-200 bg-white p-3">
+            <p className="text-[11px] uppercase tracking-wide text-zinc-500">
+              Desconto pretendido
+            </p>
+            <div className="mt-1 flex items-baseline gap-1">
+              <input
+                type="number"
+                min="0.01"
+                max="99.99"
+                step="0.01"
+                value={descontoStr}
+                onChange={(e) => setDescontoStr(e.target.value)}
+                disabled={isPending}
+                className="w-20 rounded border border-zinc-300 px-2 py-1 text-lg font-semibold text-zinc-900 focus:border-amber-500 focus:outline-none disabled:opacity-50"
+              />
+              <span className="text-lg font-semibold text-zinc-900">%</span>
+            </div>
+            <p className="text-[11px] text-zinc-500">
+              Só incide sobre custos NÃO-MO
+            </p>
           </div>
-          <p className="text-[11px] text-zinc-500">
-            Só incide sobre custos NÃO-MO
-          </p>
-        </div>
+        ) : (
+          <div className="rounded-md border border-amber-200 bg-amber-100 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-amber-900">
+              Valor alvo da proposta
+            </p>
+            <div className="mt-1 flex items-baseline gap-1">
+              <span className="text-lg font-semibold text-amber-900">R$</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                placeholder="0,00"
+                value={valorAlvoStr}
+                onChange={(e) => setValorAlvoStr(e.target.value)}
+                disabled={isPending}
+                className="w-32 rounded border border-amber-400 px-2 py-1 text-lg font-semibold text-amber-900 focus:border-amber-600 focus:outline-none disabled:opacity-50"
+              />
+            </div>
+            <p className="text-[11px] text-amber-900">
+              Ignora MO — força total exato
+            </p>
+          </div>
+        )}
 
         <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3">
           <p className="text-[11px] uppercase tracking-wide text-emerald-700">
             Total da proposta
           </p>
           <p className="mt-1 text-lg font-semibold text-emerald-900">
-            {result ? formatBRL(result.total_proposta_com_bdi) : '—'}
+            {modo === 'valor_alvo' && valorAlvoValido
+              ? formatBRL(valorAlvo)
+              : result
+                ? formatBRL(result.total_proposta_com_bdi)
+                : '—'}
           </p>
-          {result && (
+          {modo === 'desconto' && result && (
             <p className="text-[11px] text-emerald-700">
               Economia: {formatBRL(result.economia)} ({result.desconto_efetivo_global_pct.toFixed(2)}% efetivo)
+            </p>
+          )}
+          {modo === 'valor_alvo' && valorAlvoValido && (
+            <p className="text-[11px] text-emerald-700">
+              Economia vs edital: {formatBRL(totalEdital - valorAlvo)} ({((1 - valorAlvo / totalEdital) * 100).toFixed(2)}%)
             </p>
           )}
         </div>
@@ -216,29 +290,40 @@ export function ProposalCard({
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        <button
-          onClick={handleCalc}
-          disabled={isPending || !descontoValido}
-          className="rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50"
-        >
-          {isPending ? 'Calculando…' : '🧮 Calcular proposta'}
-        </button>
-        <button
-          onClick={handleExportCsv}
-          disabled={isPending || !result}
-          className="rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50"
-          title="Baixa o detalhamento item a item em CSV (abre no Excel/Google Sheets)"
-        >
-          📥 Baixar CSV
-        </button>
+        {modo === 'desconto' && (
+          <>
+            <button
+              onClick={handleCalc}
+              disabled={isPending || !descontoValido}
+              className="rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+            >
+              {isPending ? 'Calculando…' : '🧮 Calcular proposta'}
+            </button>
+            <button
+              onClick={handleExportCsv}
+              disabled={isPending || !result}
+              className="rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+              title="Baixa o detalhamento item a item em CSV (abre no Excel/Google Sheets)"
+            >
+              📥 Baixar CSV
+            </button>
+          </>
+        )}
         <button
           onClick={handleCadastrarOrcafascio}
-          disabled={isPending || !result || !orcamentoBaseId}
+          disabled={
+            isPending ||
+            !orcamentoBaseId ||
+            (modo === 'desconto' && !result) ||
+            (modo === 'valor_alvo' && !valorAlvoValido)
+          }
           className="rounded-md bg-purple-600 px-3 py-2 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50"
           title={
             !orcamentoBaseId
               ? 'Orçamento base não encontrado — recadastre o Passo 2 primeiro'
-              : 'Copia o orçamento base + aplica "ajustar valor" (linear)'
+              : modo === 'valor_alvo'
+                ? 'Cadastra proposta com valor exato digitado (ignora cálculo MO)'
+                : 'Copia o orçamento base + aplica "ajustar valor" (linear)'
           }
         >
           🚀 Cadastrar no Orçafascio

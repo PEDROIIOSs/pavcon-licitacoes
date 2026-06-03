@@ -350,7 +350,7 @@ function detectarOrcamentoAbaixoDoEdital(ctx: ContextoAnalise): Diagnostico[] {
     mensagem:
       `${ctx.composicoesVazias?.length ?? 0} composição(ões) em branco vão ` +
       `contribuir R$ 0,00 — o total do Orçafascio fica abaixo do edital. ` +
-      `O Cláudio aplica "Ajustar valor" (fator linear) pra forçar o total ` +
+      `O OrçaPav AI aplica "Ajustar valor" (fator linear) pra forçar o total ` +
       `bater com ${moeda(totalExtraido)}.`,
     sugestao:
       'Solução pragmática enquanto a re-extração com sub-itens completos não roda. ' +
