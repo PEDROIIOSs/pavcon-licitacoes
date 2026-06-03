@@ -27,11 +27,10 @@
 //   }
 // =============================================================================
 
-import { PDFDocument } from 'https://esm.sh/pdf-lib@1.17.1';
 import { handleCorsPreflight } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/json.ts';
 import { getServiceRoleClient, requireAuthenticatedUser } from '../_shared/supabase.ts';
-import { callGemini, type GeminiPart } from '../_shared/gemini.ts';
+import { callGemini, uploadGeminiFile, type GeminiPart } from '../_shared/gemini.ts';
 
 const GEMINI_FLASH_MODEL = 'gemini-2.5-flash';
 
@@ -112,12 +111,6 @@ FORMATO DA RESPOSTA — APENAS JSON, sem markdown:
 
 Devolva o JSON COMPLETO, todas as páginas, sem omitir.`;
 
-function uint8ToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
-}
-
 Deno.serve(async (req: Request) => {
   const cors = handleCorsPreflight(req);
   if (cors) return cors;
@@ -188,17 +181,39 @@ Deno.serve(async (req: Request) => {
       }
       const buffer = new Uint8Array(await blob.arrayBuffer());
 
-      // Conta páginas localmente
-      const srcDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
-      const totalPaginas = srcDoc.getPageCount();
-
-      // Chama Gemini Flash com o PDF + prompt
-      const parts: GeminiPart[] = [
-        { text: PROMPT_CLASSIFICAR },
-        { inlineData: { mimeType: 'application/pdf', data: uint8ToBase64(buffer) } },
-      ];
+      // Upload pra Gemini Files API (raw, sem base64). Mantém o consumo de
+      // memória estável mesmo pra PDFs grandes — sem isso, base64 +
+      // JSON.stringify do payload estoura o WORKER_RESOURCE_LIMIT (546).
+      // Total de páginas vem da resposta do próprio Gemini (parsed.total_paginas),
+      // então não precisamos mais carregar pdf-lib aqui.
+      let parts: GeminiPart[];
+      try {
+        const uploaded = await uploadGeminiFile({
+          apiKey,
+          bytes: buffer,
+          mimeType: 'application/pdf',
+          displayName: a.filename_original ?? 'edital.pdf',
+        });
+        parts = [
+          { text: PROMPT_CLASSIFICAR },
+          { fileData: { mimeType: 'application/pdf', fileUri: uploaded.uri } },
+        ];
+      } catch (e) {
+        resultados.push({
+          arquivo_id: a.id,
+          filename: a.filename_original,
+          total_paginas: 0,
+          paginas: [],
+          paginas_relevantes: [],
+          paginas_descartaveis: [],
+          reducao_estimada_pct: 0,
+          erro_classificacao: e instanceof Error ? e.message.slice(0, 200) : String(e),
+        });
+        continue;
+      }
 
       let classificacao: PagClassificada[] = [];
+      let totalPaginas = 0;
       let erroClassif: string | undefined;
       try {
         const result = await callGemini({
@@ -217,6 +232,16 @@ Deno.serve(async (req: Request) => {
         const parsed = JSON.parse(cleaned);
         if (Array.isArray(parsed?.paginas)) {
           classificacao = parsed.paginas as PagClassificada[];
+          // total_paginas vem do próprio Gemini (substitui pdf-lib).
+          // Fallback: maior `num` no array, ou tamanho do array.
+          if (typeof parsed.total_paginas === 'number' && parsed.total_paginas > 0) {
+            totalPaginas = parsed.total_paginas;
+          } else {
+            totalPaginas = classificacao.reduce(
+              (mx, p) => Math.max(mx, p.num ?? 0),
+              classificacao.length,
+            );
+          }
         } else {
           erroClassif = 'JSON do Gemini Flash não tem array `paginas`.';
         }

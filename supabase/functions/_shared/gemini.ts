@@ -39,7 +39,97 @@ export interface GeminiTextPart {
   text: string;
 }
 
-export type GeminiPart = GeminiInlinePart | GeminiTextPart;
+export interface GeminiFilePart {
+  fileData: { mimeType: string; fileUri: string };
+}
+
+export type GeminiPart = GeminiInlinePart | GeminiTextPart | GeminiFilePart;
+
+// ---------------------------------------------------------------------------
+// Gemini Files API — upload raw bytes (sem base64) e referencia via file_uri.
+// Necessário pra PDFs grandes: inlineData força base64 + JSON.stringify do
+// payload inteiro em memória, estourando WORKER_RESOURCE_LIMIT (546) no
+// Edge Function (150-256 MB). Files API faz streaming raw.
+// ---------------------------------------------------------------------------
+
+const GEMINI_FILES_UPLOAD_BASE = 'https://generativelanguage.googleapis.com/upload/v1beta/files';
+const GEMINI_FILES_BASE = 'https://generativelanguage.googleapis.com/v1beta/files';
+
+export interface GeminiUploadedFile {
+  name: string;       // "files/abc123"
+  uri: string;        // "https://generativelanguage.googleapis.com/v1beta/files/abc123"
+  mimeType: string;
+  sizeBytes?: string;
+  state?: string;     // "PROCESSING" | "ACTIVE" | "FAILED"
+}
+
+/**
+ * Upload um arquivo (raw bytes) pra Gemini Files API e devolve {uri, mimeType}.
+ * Espera o state virar ACTIVE (PDFs ficam em PROCESSING segundos).
+ * Arquivos expiram em 48h no Gemini — não precisa deletar manualmente.
+ */
+export async function uploadGeminiFile(opts: {
+  apiKey: string;
+  bytes: Uint8Array;
+  mimeType: string;
+  displayName?: string;
+  pollIntervalMs?: number;
+  pollTimeoutMs?: number;
+}): Promise<GeminiUploadedFile> {
+  const { apiKey, bytes, mimeType, displayName } = opts;
+  const pollInterval = opts.pollIntervalMs ?? 1500;
+  const pollTimeout = opts.pollTimeoutMs ?? 60_000;
+
+  // Upload "raw" protocol — body são os bytes do arquivo direto, sem multipart.
+  const uploadUrl = `${GEMINI_FILES_UPLOAD_BASE}?key=${apiKey}`;
+  const uploadResp = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: {
+      'X-Goog-Upload-Protocol': 'raw',
+      'X-Goog-Upload-File-Name': displayName ?? 'upload.bin',
+      'Content-Type': mimeType,
+    },
+    body: bytes,
+  });
+  const uploadText = await uploadResp.text();
+  if (!uploadResp.ok) {
+    throw new GeminiError(
+      uploadResp.status,
+      `Gemini Files upload falhou (${uploadResp.status}).`,
+      uploadText.slice(0, 500),
+    );
+  }
+  let parsed: { file?: GeminiUploadedFile };
+  try {
+    parsed = JSON.parse(uploadText);
+  } catch {
+    throw new GeminiError(502, 'Gemini Files upload: resposta não-JSON.', uploadText.slice(0, 500));
+  }
+  const file = parsed.file;
+  if (!file?.uri) {
+    throw new GeminiError(502, 'Gemini Files upload: sem file.uri.', parsed);
+  }
+
+  // Poll até ACTIVE (PDFs grandes ficam em PROCESSING por alguns segundos).
+  const fileId = file.name.replace(/^files\//, '');
+  const started = Date.now();
+  let current = file;
+  while (current.state === 'PROCESSING') {
+    if (Date.now() - started > pollTimeout) {
+      throw new GeminiError(504, `Gemini Files: timeout aguardando ACTIVE (${pollTimeout}ms).`);
+    }
+    await new Promise((r) => setTimeout(r, pollInterval));
+    const statusResp = await fetch(`${GEMINI_FILES_BASE}/${fileId}?key=${apiKey}`);
+    if (!statusResp.ok) {
+      throw new GeminiError(statusResp.status, 'Gemini Files: falha ao consultar status.');
+    }
+    current = await statusResp.json();
+  }
+  if (current.state && current.state !== 'ACTIVE') {
+    throw new GeminiError(502, `Gemini Files: state=${current.state}.`, current);
+  }
+  return current;
+}
 
 export class GeminiError extends Error {
   constructor(
@@ -121,11 +211,13 @@ export async function callGemini(
     metodo_http: 'POST',
     request_payload: {
       model: opts.model,
-      parts_summary: opts.parts.map((p) =>
-        'text' in p
-          ? { type: 'text', length: p.text.length }
-          : { type: 'inline', mime: p.inlineData.mimeType, bytes_b64: p.inlineData.data.length }
-      ),
+      parts_summary: opts.parts.map((p) => {
+        if ('text' in p) return { type: 'text', length: p.text.length };
+        if ('inlineData' in p) {
+          return { type: 'inline', mime: p.inlineData.mimeType, bytes_b64: p.inlineData.data.length };
+        }
+        return { type: 'file', mime: p.fileData.mimeType, uri: p.fileData.fileUri };
+      }),
       generationConfig: body.generationConfig,
     },
     response_status: response.status,
