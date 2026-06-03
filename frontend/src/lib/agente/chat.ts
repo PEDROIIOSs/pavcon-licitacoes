@@ -118,6 +118,36 @@ export async function chatComClaudio(
  * sozinho. Erros que precisam de input humano viram instruções claras na
  * resposta.
  */
+/**
+ * Auto-correção via Gemini Flash (alternativa gratuita ao Claude).
+ * Usa orcapav-corrigir-gemini Edge Function com function calling nativo.
+ */
+async function autoCorrigirComGemini(licitacaoId: string): Promise<ChatResultado> {
+  const supabase = await createClient();
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return { error: 'Não autenticado.' };
+
+  const url = `${env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/orcapav-corrigir-gemini`;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ licitacao_id: licitacaoId }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { error: `Gemini Flash falhou (${res.status}): ${data?.error ?? 'erro desconhecido'}` };
+    }
+    revalidatePath(`/licitacoes/${licitacaoId}`);
+    return data as ChatResultado;
+  } catch (e) {
+    return { error: `Falha de rede (Gemini): ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
 export async function autoCorrigirComIA(
   licitacaoId: string,
 ): Promise<ChatResultado> {
@@ -138,5 +168,19 @@ Quando terminar todas as ações possíveis, devolva um relatório com:
 Seja conciso. Nada de bla-bla-bla. Vai.`;
 
   // historico vazio — esta é uma sessão one-shot
-  return chatComClaudio(licitacaoId, [], prompt);
+  // Tenta Claude (Sonnet 4.5) primeiro. Se falhar com "credit balance too low"
+  // ou outro erro 4xx da Anthropic, cai pro Gemini Flash (grátis/barato).
+  const rClaude = await chatComClaudio(licitacaoId, [], prompt);
+  if (rClaude.error) {
+    const isCreditError = /credit|balance|billing|invalid_request_error/i.test(rClaude.error);
+    if (isCreditError) {
+      // Fallback transparente pro Gemini
+      const rGemini = await autoCorrigirComGemini(licitacaoId);
+      if (rGemini.error) {
+        return { error: `Claude falhou (créditos?) e Gemini também: ${rGemini.error}` };
+      }
+      return { ...rGemini, resposta: `[via Gemini Flash — Claude sem créditos]\n\n${rGemini.resposta ?? ''}` };
+    }
+  }
+  return rClaude;
 }
