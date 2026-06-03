@@ -1344,6 +1344,14 @@ export async function resetToDraft(licitacaoId: string): Promise<ActionResult> {
   // composicao_propria_itens cascade-deleta com composicoes_extraidas.
   await admin.from('composicoes_extraidas').delete().eq('licitacao_id', licitacaoId);
   await admin.from('extracoes_ocr').delete().eq('licitacao_id', licitacaoId);
+  // State machine: 'rascunho' só é alcançável via 'erro' a partir de
+  // status downstream (aguardando_revisao_humana, fase1_concluida, etc).
+  // Mesmo truque do resetToReview — passa por 'erro' (sempre permitido) e
+  // depois vai pra 'rascunho' (sempre permitido a partir de 'erro').
+  await admin
+    .from('licitacoes')
+    .update({ status: 'erro' })
+    .eq('id', licitacaoId);
   // Zera campos preenchidos pelo cadastramento
   const { error } = await admin
     .from('licitacoes')
