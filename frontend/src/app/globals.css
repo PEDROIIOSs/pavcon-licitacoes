@@ -1,8 +1,26 @@
 @import "tailwindcss";
 
+/* =============================================================================
+ * Identidade visual PavCon Construtora — paleta oficial extraída da logo.
+ * Usado como `bg-pavcon-navy`, `text-pavcon-orange`, etc. via Tailwind v4
+ * theme tokens (@theme inline + --color-* abaixo).
+ * Manter sincronizado com 04 - MANUAL da marca.
+ * ========================================================================== */
 :root {
   --background: #ffffff;
   --foreground: #171717;
+
+  /* Paleta institucional PavCon */
+  --pavcon-navy: #084088;       /* azul institucional — primary */
+  --pavcon-navy-dark: #052f63;
+  --pavcon-navy-light: #1a5ab0;
+  --pavcon-navy-50: #eef3fa;
+  --pavcon-orange: #f09000;     /* laranja construção — accent */
+  --pavcon-orange-dark: #c47500;
+  --pavcon-orange-light: #ffac3a;
+  --pavcon-orange-50: #fff4e0;
+  --pavcon-coal: #383838;       /* antracite — wordmark */
+  --pavcon-coal-soft: #686868;
 }
 
 @theme inline {
@@ -10,6 +28,18 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  /* Tokens da marca expostos como utilitários Tailwind */
+  --color-pavcon-navy: var(--pavcon-navy);
+  --color-pavcon-navy-dark: var(--pavcon-navy-dark);
+  --color-pavcon-navy-light: var(--pavcon-navy-light);
+  --color-pavcon-navy-50: var(--pavcon-navy-50);
+  --color-pavcon-orange: var(--pavcon-orange);
+  --color-pavcon-orange-dark: var(--pavcon-orange-dark);
+  --color-pavcon-orange-light: var(--pavcon-orange-light);
+  --color-pavcon-orange-50: var(--pavcon-orange-50);
+  --color-pavcon-coal: var(--pavcon-coal);
+  --color-pavcon-coal-soft: var(--pavcon-coal-soft);
 }
 
 @media (prefers-color-scheme: dark) {

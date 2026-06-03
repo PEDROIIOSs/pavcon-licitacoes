@@ -29,21 +29,21 @@ export function LoginForm({ next }: { next: string }) {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="voce@pavconconstrutora.com.br"
-            className="mt-1 block w-full rounded-md border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900"
+            className="mt-1 block w-full rounded-md border border-zinc-300 px-3 py-2 text-sm focus:border-pavcon-navy focus:outline-none focus:ring-1 focus:ring-pavcon-navy"
             disabled={isPending}
           />
         </label>
         <button
           type="submit"
           disabled={isPending || !email}
-          className="w-full rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+          className="w-full rounded-md bg-pavcon-navy px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-pavcon-navy-dark disabled:opacity-50"
         >
           {isPending ? 'Enviando…' : 'Enviar link de redefinição'}
         </button>
         <button
           type="button"
           onClick={() => setMode('signin')}
-          className="block w-full text-center text-sm text-zinc-500 hover:text-zinc-900"
+          className="block w-full text-center text-sm text-zinc-500 hover:text-pavcon-navy"
           disabled={isPending}
         >
           Voltar pro login
@@ -69,7 +69,7 @@ export function LoginForm({ next }: { next: string }) {
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           placeholder="voce@pavconconstrutora.com.br"
-          className="mt-1 block w-full rounded-md border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900"
+          className="mt-1 block w-full rounded-md border border-zinc-300 px-3 py-2 text-sm focus:border-pavcon-navy focus:outline-none focus:ring-1 focus:ring-pavcon-navy"
           disabled={isPending}
           autoComplete="email"
         />
@@ -82,7 +82,7 @@ export function LoginForm({ next }: { next: string }) {
           required
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          className="mt-1 block w-full rounded-md border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900"
+          className="mt-1 block w-full rounded-md border border-zinc-300 px-3 py-2 text-sm focus:border-pavcon-navy focus:outline-none focus:ring-1 focus:ring-pavcon-navy"
           disabled={isPending}
           autoComplete="current-password"
         />
@@ -90,7 +90,7 @@ export function LoginForm({ next }: { next: string }) {
       <button
         type="submit"
         disabled={isPending || !email || !password}
-        className="w-full rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+        className="w-full rounded-md bg-pavcon-navy px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-pavcon-navy-dark disabled:opacity-50"
       >
         {isPending ? 'Entrando…' : 'Entrar'}
       </button>

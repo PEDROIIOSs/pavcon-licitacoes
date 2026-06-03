@@ -286,7 +286,7 @@ export function FloatingClaudio({ licitacaoId }: Props) {
       {!aberto && (
         <button
           onClick={() => setAberto(true)}
-          className="fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-purple-600 text-white shadow-lg ring-4 ring-purple-200 transition hover:scale-110 hover:bg-purple-700"
+          className="fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-pavcon-navy text-white shadow-lg ring-4 ring-pavcon-orange/40 transition hover:scale-110 hover:bg-pavcon-navy-dark"
           title={
             temPendencia
               ? `${totalErros} erro(s), ${totalAvisos} aviso(s) — clique pra abrir o OrçaPav AI`
@@ -306,7 +306,7 @@ export function FloatingClaudio({ licitacaoId }: Props) {
       {/* Painel lateral */}
       {aberto && (
         <aside className="fixed right-0 top-0 z-50 flex h-full w-full flex-col bg-white shadow-2xl sm:w-96">
-          <header className="flex items-center justify-between border-b border-purple-200 bg-gradient-to-br from-purple-600 to-purple-700 px-4 py-3 text-white">
+          <header className="flex items-center justify-between border-b border-pavcon-navy/20 bg-gradient-to-br from-pavcon-navy to-pavcon-navy-dark px-4 py-3 text-white">
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/20">
                 <ClaudioAvatar size={24} />
@@ -347,7 +347,7 @@ export function FloatingClaudio({ licitacaoId }: Props) {
               onClick={() => setAba('diagnosticos')}
               className={`flex-1 px-3 py-2 text-xs font-medium transition ${
                 aba === 'diagnosticos'
-                  ? 'border-b-2 border-purple-600 text-purple-700'
+                  ? 'border-b-2 border-pavcon-orange text-pavcon-navy'
                   : 'text-zinc-500 hover:text-zinc-700'
               }`}
             >
@@ -362,7 +362,7 @@ export function FloatingClaudio({ licitacaoId }: Props) {
               onClick={() => setAba('chat')}
               className={`flex-1 px-3 py-2 text-xs font-medium transition ${
                 aba === 'chat'
-                  ? 'border-b-2 border-purple-600 text-purple-700'
+                  ? 'border-b-2 border-pavcon-orange text-pavcon-navy'
                   : 'text-zinc-500 hover:text-zinc-700'
               }`}
             >
@@ -374,7 +374,7 @@ export function FloatingClaudio({ licitacaoId }: Props) {
           {aba === 'diagnosticos' && (
             <div className="flex-1 overflow-y-auto bg-zinc-50 px-3 py-3">
               <div className="mb-3 flex gap-2">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-600 text-white">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-pavcon-navy text-white">
                   <ClaudioAvatar size={18} />
                 </div>
                 <div className="max-w-[80%] rounded-2xl rounded-tl-sm bg-white p-3 text-xs text-zinc-900 shadow-sm">
@@ -415,7 +415,7 @@ export function FloatingClaudio({ licitacaoId }: Props) {
                           <button
                             onClick={() => handleAutoFix(d)}
                             disabled={isPending}
-                            className="rounded bg-purple-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-purple-700 disabled:opacity-50"
+                            className="rounded bg-pavcon-navy px-2 py-1 text-[10px] font-medium text-white hover:bg-pavcon-navy-dark disabled:opacity-50"
                             title={autofix.descricao}
                           >
                             {autofix.label}
@@ -426,7 +426,7 @@ export function FloatingClaudio({ licitacaoId }: Props) {
                           <button
                             onClick={() => setFormAberto((prev) => ({ ...prev, [d.id]: !prev[d.id] }))}
                             disabled={isPending}
-                            className="rounded bg-purple-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-purple-700 disabled:opacity-50"
+                            className="rounded bg-pavcon-navy px-2 py-1 text-[10px] font-medium text-white hover:bg-pavcon-navy-dark disabled:opacity-50"
                           >
                             {formAberto[d.id] ? '✕ Fechar' : d.acao_acionavel.label}
                           </button>
@@ -435,7 +435,7 @@ export function FloatingClaudio({ licitacaoId }: Props) {
                           <button
                             onClick={() => handleForcarTotal(d)}
                             disabled={isPending}
-                            className="rounded bg-purple-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-purple-700 disabled:opacity-50"
+                            className="rounded bg-pavcon-navy px-2 py-1 text-[10px] font-medium text-white hover:bg-pavcon-navy-dark disabled:opacity-50"
                           >
                             {d.acao_acionavel.label}
                           </button>
@@ -443,7 +443,7 @@ export function FloatingClaudio({ licitacaoId }: Props) {
                         {d.acao_acionavel?.tipo === 'abrir_mapeamentos' && (
                           <Link
                             href="/dashboard/code-mappings"
-                            className="rounded border border-purple-300 bg-white px-2 py-1 text-[10px] font-medium text-purple-700 hover:bg-purple-50"
+                            className="rounded border border-pavcon-navy/40 bg-white px-2 py-1 text-[10px] font-medium text-pavcon-navy hover:bg-pavcon-navy-50"
                           >
                             {d.acao_acionavel.label}
                           </Link>
@@ -467,8 +467,8 @@ export function FloatingClaudio({ licitacaoId }: Props) {
 
                       {/* Inline form: definir data-base */}
                       {formAberto[d.id] && d.acao_acionavel?.tipo === 'definir_data_base_inline' && (
-                        <div className="mt-2 rounded-md border border-purple-200 bg-purple-50 p-2">
-                          <label className="block text-[10px] font-medium text-purple-900">
+                        <div className="mt-2 rounded-md border border-pavcon-navy/20 bg-pavcon-navy-50 p-2">
+                          <label className="block text-[10px] font-medium text-pavcon-navy">
                             Data-base do edital
                           </label>
                           <p className="mt-0.5 text-[10px] text-zinc-700">
@@ -483,12 +483,12 @@ export function FloatingClaudio({ licitacaoId }: Props) {
                               onChange={(e) => setDataBaseInput((prev) => ({ ...prev, [d.id]: e.target.value }))}
                               onKeyDown={(e) => { if (e.key === 'Enter') handleDefinirDataBase(d); }}
                               placeholder="04/2026"
-                              className="flex-1 rounded border border-purple-300 bg-white px-2 py-1 text-xs text-zinc-900 focus:border-purple-500 focus:outline-none"
+                              className="flex-1 rounded border border-pavcon-navy/40 bg-white px-2 py-1 text-xs text-zinc-900 focus:border-pavcon-navy focus:outline-none"
                             />
                             <button
                               onClick={() => handleDefinirDataBase(d)}
                               disabled={isPending}
-                              className="rounded bg-purple-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-purple-700 disabled:opacity-50"
+                              className="rounded bg-pavcon-navy px-2 py-1 text-[10px] font-medium text-white hover:bg-pavcon-navy-dark disabled:opacity-50"
                             >
                               Salvar
                             </button>
@@ -498,8 +498,8 @@ export function FloatingClaudio({ licitacaoId }: Props) {
 
                       {/* Inline form: mapear codes descontinuados */}
                       {formAberto[d.id] && d.acao_acionavel?.tipo === 'mapping_inline' && (
-                        <div className="mt-2 rounded-md border border-purple-200 bg-purple-50 p-2">
-                          <p className="text-[10px] font-medium text-purple-900">
+                        <div className="mt-2 rounded-md border border-pavcon-navy/20 bg-pavcon-navy-50 p-2">
+                          <p className="text-[10px] font-medium text-pavcon-navy">
                             Mapeia code antigo → moderno
                           </p>
                           <p className="mt-0.5 text-[10px] text-zinc-700">
@@ -511,7 +511,7 @@ export function FloatingClaudio({ licitacaoId }: Props) {
                               const key = `${c.fonte_original}/${c.codigo_original}`;
                               return (
                                 <div key={key} className="flex items-center gap-1.5">
-                                  <code className="shrink-0 rounded bg-white px-1 py-0.5 text-[10px] text-purple-900" title={c.descricao ?? ''}>
+                                  <code className="shrink-0 rounded bg-white px-1 py-0.5 text-[10px] text-pavcon-navy" title={c.descricao ?? ''}>
                                     {c.fonte_original}/{c.codigo_original}
                                   </code>
                                   <span className="text-[10px] text-zinc-500">→</span>
@@ -523,7 +523,7 @@ export function FloatingClaudio({ licitacaoId }: Props) {
                                       [d.id]: { ...(prev[d.id] ?? {}), [key]: e.target.value },
                                     }))}
                                     placeholder="código novo"
-                                    className="flex-1 rounded border border-purple-300 bg-white px-1.5 py-0.5 text-[10px] text-zinc-900 focus:border-purple-500 focus:outline-none"
+                                    className="flex-1 rounded border border-pavcon-navy/40 bg-white px-1.5 py-0.5 text-[10px] text-zinc-900 focus:border-pavcon-navy focus:outline-none"
                                   />
                                 </div>
                               );
@@ -533,7 +533,7 @@ export function FloatingClaudio({ licitacaoId }: Props) {
                             <button
                               onClick={() => handleSalvarMapeamentos(d)}
                               disabled={isPending}
-                              className="rounded bg-purple-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-purple-700 disabled:opacity-50"
+                              className="rounded bg-pavcon-navy px-2 py-1 text-[10px] font-medium text-white hover:bg-pavcon-navy-dark disabled:opacity-50"
                             >
                               Salvar todos
                             </button>
@@ -553,7 +553,7 @@ export function FloatingClaudio({ licitacaoId }: Props) {
               <div className="flex-1 overflow-y-auto bg-zinc-50 px-3 py-3">
                 {historico.length === 0 && (
                   <div className="mb-3 flex gap-2">
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-600 text-white">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-pavcon-navy text-white">
                       <ClaudioAvatar size={18} />
                     </div>
                     <div className="max-w-[80%] rounded-2xl rounded-tl-sm bg-white p-3 text-xs text-zinc-900 shadow-sm">
@@ -572,14 +572,14 @@ export function FloatingClaudio({ licitacaoId }: Props) {
                 {historico.map((m, i) => (
                   <div key={i} className={`mb-3 flex gap-2 ${m.role === 'user' ? 'flex-row-reverse' : ''}`}>
                     {m.role === 'assistant' && (
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-600 text-white">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-pavcon-navy text-white">
                         <ClaudioAvatar size={18} />
                       </div>
                     )}
                     <div
                       className={`max-w-[80%] whitespace-pre-wrap rounded-2xl p-3 text-xs shadow-sm ${
                         m.role === 'user'
-                          ? 'rounded-tr-sm bg-purple-600 text-white'
+                          ? 'rounded-tr-sm bg-pavcon-navy text-white'
                           : 'rounded-tl-sm bg-white text-zinc-900'
                       }`}
                     >
@@ -590,14 +590,14 @@ export function FloatingClaudio({ licitacaoId }: Props) {
 
                 {chatPensando && (
                   <div className="mb-3 flex gap-2">
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-600 text-white">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-pavcon-navy text-white">
                       <ClaudioAvatar size={18} />
                     </div>
                     <div className="rounded-2xl rounded-tl-sm bg-white p-3 text-xs text-zinc-500 shadow-sm">
                       <span className="inline-flex gap-1">
-                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-purple-400" />
-                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-purple-400" style={{ animationDelay: '0.2s' }} />
-                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-purple-400" style={{ animationDelay: '0.4s' }} />
+                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-pavcon-orange" />
+                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-pavcon-orange" style={{ animationDelay: '0.2s' }} />
+                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-pavcon-orange" style={{ animationDelay: '0.4s' }} />
                       </span>
                       <span className="ml-2">OrçaPav AI está pensando…</span>
                     </div>
@@ -624,12 +624,12 @@ export function FloatingClaudio({ licitacaoId }: Props) {
                     placeholder="Pergunte pro OrçaPav AI… (Enter envia, Shift+Enter quebra linha)"
                     disabled={chatPensando}
                     rows={2}
-                    className="flex-1 resize-none rounded border border-zinc-300 px-2 py-1.5 text-xs focus:border-purple-500 focus:outline-none disabled:bg-zinc-50"
+                    className="flex-1 resize-none rounded border border-zinc-300 px-2 py-1.5 text-xs focus:border-pavcon-navy focus:outline-none disabled:bg-zinc-50"
                   />
                   <button
                     onClick={enviarPergunta}
                     disabled={chatPensando || !perguntaAtual.trim()}
-                    className="rounded bg-purple-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-purple-700 disabled:opacity-50"
+                    className="rounded bg-pavcon-navy px-3 py-1.5 text-xs font-medium text-white hover:bg-pavcon-navy-dark disabled:opacity-50"
                   >
                     Enviar
                   </button>

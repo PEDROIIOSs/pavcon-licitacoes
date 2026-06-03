@@ -4,6 +4,7 @@ import { formatBRL, formatDate, statusColor, statusLabel } from '@/lib/utils';
 import { isAdmin } from '@/lib/auth';
 import { RowActions } from './row-actions';
 import Link from 'next/link';
+import Image from 'next/image';
 
 export const metadata = { title: 'Painel — OrçaPav AI' };
 
@@ -71,27 +72,43 @@ export default async function DashboardPage({
 
   return (
     <div className="min-h-screen">
-      <header className="border-b border-zinc-200 bg-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
-          <div>
-            <h1 className="text-lg font-semibold text-zinc-900">OrçaPav AI</h1>
-            <p className="text-xs text-zinc-500">
-              {user?.email ?? '—'}
-            </p>
+      <header className="border-b border-zinc-200 bg-white shadow-sm">
+        {/* Faixa fina navy no topo — identidade da marca PavCon */}
+        <div className="h-1 w-full bg-gradient-to-r from-pavcon-navy via-pavcon-navy-light to-pavcon-orange" />
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-3">
+          <div className="flex items-center gap-4">
+            <Link href="/dashboard" className="flex items-center gap-3">
+              <Image
+                src="/brand/pavcon-horizontal.jpg"
+                alt="PavCon Construtora"
+                width={140}
+                height={36}
+                priority
+                className="h-9 w-auto"
+              />
+              <span className="hidden h-8 w-px bg-zinc-200 sm:block" />
+              <div className="hidden sm:block">
+                <p className="text-sm font-bold tracking-tight text-pavcon-coal">
+                  OrçaPav <span className="text-pavcon-orange">AI</span>
+                </p>
+                <p className="text-[10px] text-zinc-500">Automação de orçamentos</p>
+              </div>
+            </Link>
           </div>
           <div className="flex items-center gap-2">
+            <span className="hidden text-xs text-zinc-500 sm:inline">{user?.email ?? '—'}</span>
             {userIsAdmin && (
               <>
                 <Link
                   href="/dashboard/code-mappings"
-                  className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
+                  className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:border-pavcon-navy hover:bg-pavcon-navy-50 hover:text-pavcon-navy"
                   title="Mapeamento de códigos descontinuados do Orçafascio"
                 >
                   Códigos
                 </Link>
                 <Link
                   href="/dashboard/usuarios"
-                  className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
+                  className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:border-pavcon-navy hover:bg-pavcon-navy-50 hover:text-pavcon-navy"
                 >
                   Usuários
                 </Link>
@@ -100,7 +117,7 @@ export default async function DashboardPage({
             <form action={signOut}>
               <button
                 type="submit"
-                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
+                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:border-pavcon-orange hover:bg-pavcon-orange-50 hover:text-pavcon-orange-dark"
               >
                 Sair
               </button>
