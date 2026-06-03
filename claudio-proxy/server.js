@@ -22,8 +22,15 @@ import { setTimeout as delay } from 'timers/promises';
 
 const PORT = process.env.PORT || 3001;
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
-const TIMEOUT_MS = Number(process.env.CLAUDE_TIMEOUT_MS || 120000); // 2 min
+const TIMEOUT_MS = Number(process.env.CLAUDE_TIMEOUT_MS || 300000); // 5 min (operações no repo levam mais tempo)
 const AUTH_TOKEN = process.env.CLAUDIO_PROXY_TOKEN || '';
+
+// Diretório do repositório — o Claude Code roda aqui e tem acesso às ferramentas de arquivo
+// Por padrão, sobe um nível a partir do claudio-proxy/
+import { fileURLToPath } from 'url';
+import { dirname, resolve } from 'path';
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const REPO_PATH = process.env.REPO_PATH || resolve(__dirname, '..');
 
 const app = express();
 app.use(cors());
@@ -98,12 +105,18 @@ app.post('/chat', async (req, res) => {
   //   --output-format text|json: formato saída
   //   --append-system-prompt: adiciona ao system padrão
   // Pra ver as opções disponíveis: `claude --help`
-  const args = ['--print', '--output-format', 'text'];
+  // --dangerously-skip-permissions: permite que o Claude edite/leia arquivos sem pedir confirmação
+  // Seguro aqui porque o que chega é o prompt do Cláudio (Edge Function autenticada), não input direto do usuário
+  const args = [
+    '--print',
+    '--output-format', 'text',
+    '--dangerously-skip-permissions',
+  ];
   if (system) {
     args.push('--append-system-prompt', system);
   }
 
-  console.log(`[claudio-proxy] chamando claude com ${messages.length} mensagem(ns)`);
+  console.log(`[claudio-proxy] chamando claude com ${messages.length} mensagem(ns) | repo: ${REPO_PATH}`);
   const startedAt = Date.now();
 
   try {
@@ -133,6 +146,7 @@ function executarClaude(args, stdinInput) {
     const proc = spawn(CLAUDE_BIN, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env },
+      cwd: REPO_PATH, // Claude Code roda dentro do repositório — tem acesso a todos os arquivos
     });
 
     let stdout = '';

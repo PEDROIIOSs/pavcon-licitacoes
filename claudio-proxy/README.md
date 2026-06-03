@@ -50,6 +50,10 @@ npm start
 CLAUDIO_PROXY_TOKEN="cole-aqui-o-token-do-passo-2" npm start
 ```
 
+> **Com acesso ao repositório**: o Claude Code agora roda dentro do diretório do projeto (`../` relativo ao `claudio-proxy/`). Ele pode ler, editar e corrigir arquivos automaticamente.
+>
+> Para apontar pra um repositório diferente: `REPO_PATH=/caminho/do/repo npm start`
+
 Deve aparecer:
 ```
 ╔════════════════════════════════════════════════════════════╗
