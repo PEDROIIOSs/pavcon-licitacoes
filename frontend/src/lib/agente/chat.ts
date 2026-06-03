@@ -119,6 +119,60 @@ export async function chatComClaudio(
  * resposta.
  */
 /**
+ * Dispara o WORKER autônomo do OrçaPav AI — usa base de conhecimento
+ * (orcapav_knowledge_codes) com 24+ mappings pré-cadastrados, e Gemini
+ * Flash só pra códigos desconhecidos. Auto-aprende.
+ *
+ * Retorno tem formato compatível com ChatResultado pra reuso da UI.
+ */
+export async function dispararAgenteOrcapav(licitacaoId: string): Promise<ChatResultado & {
+  resultados?: Array<{
+    licitacao_id: string;
+    warnings_count?: number;
+    codigos_extraidos?: number;
+    do_knowledge?: number;
+    do_gemini?: number;
+    total_aplicados?: number;
+  }>;
+}> {
+  const supabase = await createClient();
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return { error: 'Não autenticado.' };
+
+  const url = `${env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/orcapav-worker`;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ licitacao_id: licitacaoId }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { error: `Worker falhou (${res.status}): ${data?.error ?? 'erro desconhecido'}` };
+    }
+    revalidatePath(`/licitacoes/${licitacaoId}`);
+
+    const r = (data.resultados ?? [])[0];
+    const resposta = r
+      ? `✓ ${r.total_aplicados ?? 0} código(s) mapeado(s) — ${r.do_knowledge ?? 0} da base de conhecimento, ${r.do_gemini ?? 0} do Gemini Flash. ` +
+        `Total de códigos extraídos das ${r.warnings_count} warnings: ${r.codigos_extraidos}.`
+      : 'Nenhuma licitação processada.';
+
+    return {
+      ok: true,
+      resposta,
+      acoes_executadas: r ? [{ tool: 'orcapav_worker', input: { licitacaoId }, result: r }] : [],
+      resultados: data.resultados,
+    };
+  } catch (e) {
+    return { error: `Falha de rede (worker): ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/**
  * Auto-correção via Gemini Flash (alternativa gratuita ao Claude).
  * Usa orcapav-corrigir-gemini Edge Function com function calling nativo.
  */

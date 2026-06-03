@@ -14,7 +14,7 @@ import {
   startExtraction,
   type ExtractedItem,
 } from './actions';
-import { autoCorrigirComIA } from '@/lib/agente/chat';
+import { dispararAgenteOrcapav } from '@/lib/agente/chat';
 import { ExtractionEditor } from './extraction-editor';
 import { ImportJsonModal } from './import-json-modal';
 import { EXTRACTION_PROMPT, NOTEBOOKLM_URL, claudeNewChatUrl } from './prompt';
@@ -281,7 +281,7 @@ export function ExtractionPanel({
       iteracao,
       mensagem: `Iteração ${iteracao}/3: IA analisando ${warningsAtuais.length} warning(s)…`,
     });
-    const r = await autoCorrigirComIA(licId);
+    const r = await dispararAgenteOrcapav(licId);
     if (r.error) {
       // IA falhou — não bloqueia o usuário, ele vê os warnings normalmente
       setIaCorrigindo(null);
