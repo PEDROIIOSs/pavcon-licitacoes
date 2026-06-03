@@ -370,7 +370,7 @@ export function ExtractionPanel({
                 ⚡ Gemini API (automático)
               </p>
               <p className="mt-1 text-xs text-zinc-600">
-                Roda a Edge Function chamando Gemini 2.5 Pro. 1–3 min, ~$0.50/edital.
+                Roda a Edge Function chamando Gemini 3.1 Pro Preview. 2–5 min, ~$0.50/edital.
               </p>
             </button>
 
