@@ -33,6 +33,7 @@ export interface ContextoAnalise {
     status: string;
     titulo: string;
     orcafascio_orcamento_base_id: string | null;
+    valor_total_edital?: number | null;
     cadastro_resumo: {
       cadastrado_em?: string;
       bancos_configurados?: string[];
@@ -40,6 +41,10 @@ export interface ContextoAnalise {
       total_itens_batch?: number;
     } | null;
   };
+  /** Total dos itens 'servico' somados (do banco PavCon). */
+  totalExtraidoServicos?: number;
+  /** Total atual do orçamento no Orçafascio (lido via API ou cache). */
+  totalOrcamentoOrcafascio?: number | null;
   cabecalho: {
     uf?: string;
     bdi_percentual?: number | string;
@@ -318,6 +323,49 @@ function detectarServicosSemFonte(ctx: ContextoAnalise): Diagnostico[] {
 }
 
 // =============================================================================
+// Detector 10: orçamento Orçafascio muito abaixo do total extraído
+// =============================================================================
+// Quando o cadastramento gera composições em branco (sub-itens faltando) ou
+// codes que falham, o total do orçamento no Orçafascio fica MUITO abaixo do
+// total extraído da planilha do edital. Cláudio detecta o gap e oferece
+// "forçar total" via ajustarValor — fix pragmático enquanto a re-extração
+// completa não roda.
+function detectarOrcamentoAbaixoDoEdital(ctx: ContextoAnalise): Diagnostico[] {
+  // Só faz sentido se tem budget cadastrado.
+  if (!ctx.licitacao.orcafascio_orcamento_base_id) return [];
+  const totalExtraido = ctx.totalExtraidoServicos ?? 0;
+  if (totalExtraido <= 0) return [];
+  // Quando temos composições em branco (= sub_itens faltando), o orçamento
+  // no Orçafascio fica abaixo do total extraído. Mesmo sem saber o total
+  // exato no Orçafascio, oferecer "forçar total" é seguro: o backend chama
+  // ajustarValor que aplica fator linear pro target.
+  const temComposVazias = (ctx.composicoesVazias?.length ?? 0) > 0;
+  if (!temComposVazias) return []; // não precisa forçar se tá tudo populado
+  const moeda = (n: number) =>
+    n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  return [{
+    tipo: 'orcamento_abaixo_do_edital',
+    severidade: 'erro',
+    titulo: `Forçar total do orçamento = ${moeda(totalExtraido)}`,
+    mensagem:
+      `${ctx.composicoesVazias?.length ?? 0} composição(ões) em branco vão ` +
+      `contribuir R$ 0,00 — o total do Orçafascio fica abaixo do edital. ` +
+      `O Cláudio aplica "Ajustar valor" (fator linear) pra forçar o total ` +
+      `bater com ${moeda(totalExtraido)}.`,
+    sugestao:
+      'Solução pragmática enquanto a re-extração com sub-itens completos não roda. ' +
+      'Distribuição interna fica imperfeita (composições em R$ 0 continuam zeradas), ' +
+      'mas o total bate com o edital — suficiente pra submissão.',
+    acao_acionavel: {
+      tipo: 'forcar_total_inline',
+      params: { valor_alvo: totalExtraido },
+      label: `🎯 Forçar total = ${moeda(totalExtraido)}`,
+    },
+    contexto: { total_extraido: totalExtraido },
+  }];
+}
+
+// =============================================================================
 // Orchestrator
 // =============================================================================
 export const DETECTORES: Array<(ctx: ContextoAnalise) => Diagnostico[]> = [
@@ -330,6 +378,7 @@ export const DETECTORES: Array<(ctx: ContextoAnalise) => Diagnostico[]> = [
   detectarPropriaSemCodigo,
   detectarReclassificados,
   detectarServicosSemFonte,
+  detectarOrcamentoAbaixoDoEdital,
 ];
 
 export function rodarAnalise(ctx: ContextoAnalise): Diagnostico[] {

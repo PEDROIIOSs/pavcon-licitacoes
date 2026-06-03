@@ -6,6 +6,7 @@ import { analisarLicitacao, ignorarDiagnostico, marcarResolvido } from '@/lib/ag
 import {
   definirDataBase,
   executarAutoFix,
+  forcarTotalOrcamentoBase,
   salvarMapeamentosCodes,
 } from '@/lib/agente/auto-fixes';
 import { type ChatMensagem, chatComClaudio } from '@/lib/agente/chat';
@@ -172,6 +173,28 @@ export function FloatingClaudio({ licitacaoId }: Props) {
       else {
         setSucesso(r.mensagem ?? 'Data-base definida.');
         setFormAberto((prev) => ({ ...prev, [diag.id]: false }));
+        const ar = await analisarLicitacao(licitacaoId);
+        if (ar.diagnosticos) setDiagnosticos(ar.diagnosticos as Diagnostico[]);
+      }
+    });
+  }
+
+  function handleForcarTotal(diag: Diagnostico) {
+    const valorAlvo = Number(diag.acao_acionavel?.params?.valor_alvo);
+    if (!Number.isFinite(valorAlvo) || valorAlvo <= 0) {
+      setErro('valor_alvo inválido no diagnóstico.');
+      return;
+    }
+    if (!confirm(`Forçar total do orçamento pra R$ ${valorAlvo.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}? Isso aplica fator linear em todos os itens.`)) {
+      return;
+    }
+    setErro(null);
+    setSucesso(null);
+    startTransition(async () => {
+      const r = await forcarTotalOrcamentoBase(licitacaoId, valorAlvo);
+      if (r.error) setErro(r.error);
+      else {
+        setSucesso(r.mensagem ?? 'Total forçado com sucesso.');
         const ar = await analisarLicitacao(licitacaoId);
         if (ar.diagnosticos) setDiagnosticos(ar.diagnosticos as Diagnostico[]);
       }
@@ -406,6 +429,15 @@ export function FloatingClaudio({ licitacaoId }: Props) {
                             className="rounded bg-purple-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-purple-700 disabled:opacity-50"
                           >
                             {formAberto[d.id] ? '✕ Fechar' : d.acao_acionavel.label}
+                          </button>
+                        )}
+                        {d.acao_acionavel?.tipo === 'forcar_total_inline' && (
+                          <button
+                            onClick={() => handleForcarTotal(d)}
+                            disabled={isPending}
+                            className="rounded bg-purple-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-purple-700 disabled:opacity-50"
+                          >
+                            {d.acao_acionavel.label}
                           </button>
                         )}
                         {d.acao_acionavel?.tipo === 'abrir_mapeamentos' && (

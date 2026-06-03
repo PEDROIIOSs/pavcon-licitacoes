@@ -264,7 +264,73 @@ export async function salvarMapeamentosCodes(
 }
 
 /**
- * AUTO-FIX 5: Despacha por tipo de diagnóstico.
+ * AUTO-FIX 5: Força o total do orçamento BASE a bater com o valor do edital.
+ *
+ * Usa o "Ajustar valor" do Orçafascio (fator linear sobre todos os itens).
+ * Pragmático pra quando o cadastramento ficou com composições em branco e o
+ * total ficou abaixo do edital — em vez de re-cadastrar tudo, escala o que
+ * existe pra fechar o valor.
+ *
+ * LIMITAÇÃO: distribuição interna fica imperfeita (composições em R$ 0,00
+ * continuam em R$ 0,00; demais infladas pelo fator). Total = correto, itens
+ * individualmente = aproximação. Pra estrutura fiel ao edital, faça
+ * re-extração com sub-itens.
+ */
+export async function forcarTotalOrcamentoBase(
+  licitacaoId: string,
+  valorTotalAlvo: number,
+): Promise<AutoFixResult> {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!user || !session) return { error: 'Não autenticado.' };
+
+  if (!Number.isFinite(valorTotalAlvo) || valorTotalAlvo <= 0) {
+    return { error: `valor_total_alvo inválido: ${valorTotalAlvo}` };
+  }
+
+  const admin = createAdminClient();
+  // Acha credencial WEB do Orçafascio (a função usa session web).
+  const { data: creds } = await admin
+    .from('api_credentials')
+    .select('id, metadata')
+    .eq('provider', 'orcafascio')
+    .eq('ativo', true);
+  const cred = (creds ?? []).find(
+    (c) => (c.metadata as { auth_type?: string } | null)?.auth_type === 'web',
+  );
+  if (!cred) return { error: 'Credencial Orçafascio (web) não encontrada.' };
+
+  const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/orcafascio-ajustar-total`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      licitacao_id: licitacaoId,
+      credential_id: cred.id,
+      valor_total_alvo: valorTotalAlvo,
+    }),
+  });
+  const text = await res.text();
+  let body: Record<string, unknown> = {};
+  try { body = JSON.parse(text); } catch {}
+  if (!res.ok) {
+    return { error: `Ajustar valor falhou (${res.status}): ${(body.error as string) ?? text.slice(0, 200)}` };
+  }
+  revalidatePath(`/licitacoes/${licitacaoId}`);
+  return {
+    ok: true,
+    mensagem: `Total do orçamento ajustado pra R$ ${valorTotalAlvo.toFixed(2)}. ` +
+      `Abre o Orçafascio pra conferir — distribuição interna foi escalada.`,
+    mudancas: 1,
+  };
+}
+
+/**
+ * AUTO-FIX 6: Despacha por tipo de diagnóstico.
  * Cada `tipo` mapeia pra uma função específica.
  *
  * Auto-fixes com payload (data-base, mapeamentos) NÃO usam esse dispatcher —

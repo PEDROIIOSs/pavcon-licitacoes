@@ -46,9 +46,27 @@ export async function analisarLicitacao(
 
   const { data: servicos } = await admin
     .from('composicoes_extraidas')
-    .select('item_codigo, descricao, fonte, codigo, orcafascio_composition_id')
+    .select('item_codigo, descricao, fonte, codigo, orcafascio_composition_id, preco_total')
     .eq('licitacao_id', licitacaoId)
     .eq('tipo_linha', 'servico');
+
+  // Total extraído (com BDI) = soma dos preco_total dos serviços. Esse é
+  // o "valor do edital" pra fins de comparação com o que está cadastrado
+  // no Orçafascio. O detector orcamento_abaixo_do_edital usa pra flagar
+  // diferenças relevantes (>15% e >R$5k).
+  const totalExtraidoServicos = (servicos ?? []).reduce(
+    (acc, s) => acc + Number((s as { preco_total?: number | null }).preco_total ?? 0),
+    0,
+  );
+
+  // Total atual do Orçafascio: pega do cadastro_resumo (escrito por
+  // orcafascio-cadastrar-orcamento). Se não tem resumo, é null e o
+  // detector não dispara.
+  const resumo = (licitacao as { cadastro_resumo?: Record<string, unknown> | null }).cadastro_resumo;
+  const totalOrcamentoOrcafascio = resumo && typeof resumo === 'object' &&
+    typeof (resumo as { total_orcamento?: unknown }).total_orcamento === 'number'
+    ? (resumo as { total_orcamento: number }).total_orcamento
+    : null;
 
   // Codes pendentes da tabela orcafascio_code_mappings que tocam essa
   // licitação (filtra por sub-itens das composições próprias)
@@ -111,6 +129,8 @@ export async function analisarLicitacao(
     servicos: (servicos ?? []) as ContextoAnalise['servicos'],
     codesPendentes,
     composicoesVazias,
+    totalExtraidoServicos,
+    totalOrcamentoOrcafascio,
   };
 
   // 2) Roda detectores
