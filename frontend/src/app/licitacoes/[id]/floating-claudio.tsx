@@ -48,11 +48,10 @@ const SEV_STYLES: Record<string, { dot: string; ring: string }> = {
   sucesso: { dot: 'bg-emerald-500', ring: 'ring-emerald-200' },
 };
 
-// Engenheiro com capacete de obra — avatar do OrçaPav AI.
-// Renderiza dentro de bg navy (cor da marca Pavcon), então:
-// - currentColor (linhas) = white herdado do parent text-white
-// - capacete preenchido em laranja (#F09000) pra contrastar
-// - camisa só com outline pra manter integração visual com o bg navy
+// Avatar OrçaPav AI — capacete de obra clean (estilo Heroicons).
+// Foco no símbolo do capacete + silhueta de cabeça, sem detalhes faciais
+// que ficam pixelados em tamanho pequeno. Capacete laranja Pavcon como
+// elemento dominante, cabeça/ombros em branco (currentColor) sobre navy.
 const ClaudioAvatar = ({ size = 24, className = '' }: { size?: number; className?: string }) => (
   <svg
     width={size}
@@ -63,67 +62,52 @@ const ClaudioAvatar = ({ size = 24, className = '' }: { size?: number; className
     className={className}
     aria-label="Engenheiro Pavcon"
   >
-    {/* Capacete — preenchido em laranja institucional */}
+    {/* Silhueta da cabeça (atrás do capacete) */}
     <path
-      d="M5 9.5 Q5 5 12 5 Q19 5 19 9.5 Z"
-      fill="#F09000"
-      stroke="currentColor"
-      strokeWidth="1.3"
-      strokeLinejoin="round"
-    />
-    {/* Aba do capacete */}
-    <path
-      d="M4 10 L20 10"
+      d="M8.5 11.5 Q8.5 14.5 12 14.5 Q15.5 14.5 15.5 11.5"
       stroke="currentColor"
       strokeWidth="1.6"
       strokeLinecap="round"
-    />
-    {/* Listra detalhe do capacete (sombra/highlight) */}
-    <path
-      d="M6 8 Q12 6.3 18 8"
-      stroke="#FFFFFF"
-      strokeWidth="1"
-      strokeLinecap="round"
-      fill="none"
-      opacity="0.55"
-    />
-    {/* Rosto — ovalado */}
-    <ellipse
-      cx="12"
-      cy="13.4"
-      rx="3.2"
-      ry="2.6"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.4"
-    />
-    {/* Olhos */}
-    <circle cx="10.8" cy="13" r="0.5" fill="currentColor" />
-    <circle cx="13.2" cy="13" r="0.5" fill="currentColor" />
-    {/* Sorriso */}
-    <path
-      d="M10.8 14.4 Q12 15.2 13.2 14.4"
-      stroke="currentColor"
-      strokeWidth="0.9"
-      strokeLinecap="round"
       fill="none"
     />
-    {/* Ombros / colarinho (outline em currentColor → fica em branco) */}
+    {/* Pescoço/ombros — arco abaixo */}
     <path
-      d="M6.5 22 L6.5 18.5 Q6.5 16.8 8.5 16.3 L12 18 L15.5 16.3 Q17.5 16.8 17.5 18.5 L17.5 22"
+      d="M5.5 21 Q5.5 17 9 16 L12 17.2 L15 16 Q18.5 17 18.5 21"
       stroke="currentColor"
-      strokeWidth="1.5"
+      strokeWidth="1.8"
       strokeLinecap="round"
       strokeLinejoin="round"
       fill="none"
     />
-    {/* Gola em V */}
+
+    {/* Capacete — domo + aba (laranja Pavcon, dominante) */}
+    {/* Domo */}
     <path
-      d="M10 16.8 L12 18 L14 16.8"
-      stroke="currentColor"
+      d="M6 11 Q6 5.5 12 5.5 Q18 5.5 18 11 Z"
+      fill="#F09000"
+      stroke="#FFFFFF"
+      strokeWidth="1.4"
+      strokeLinejoin="round"
+    />
+    {/* Aba frontal saliente */}
+    <rect
+      x="4.5"
+      y="10.6"
+      width="15"
+      height="1.6"
+      rx="0.8"
+      fill="#F09000"
+      stroke="#FFFFFF"
       strokeWidth="1.2"
       strokeLinejoin="round"
-      fill="none"
+    />
+    {/* Crista central do capacete (detalhe técnico) */}
+    <path
+      d="M12 5.5 L12 10.6"
+      stroke="#FFFFFF"
+      strokeWidth="1.2"
+      strokeLinecap="round"
+      opacity="0.85"
     />
   </svg>
 );
