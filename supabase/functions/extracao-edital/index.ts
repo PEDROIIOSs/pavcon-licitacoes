@@ -250,6 +250,18 @@ Deno.serve(async (req: Request) => {
     }
     extracaoId = extr.id;
 
+    // =========================================================================
+    // ASYNC BACKGROUND: tudo daqui pra baixo roda DEPOIS da gente retornar 202
+    // pro cliente. EdgeRuntime.waitUntil mantém a função viva por até ~400s
+    // (vs 150s do request timeout). Necessário pq gemini-3.1-pro-preview com
+    // thinking tokens leva ~150-300s pra extrair edital grande, e antes a
+    // chamada morria silenciosamente no meio.
+    //
+    // O cliente recebe 202 com o extracao_id e fica polling o status do
+    // registro extracoes_ocr até virar 'sucesso' ou 'falha'.
+    // =========================================================================
+    const runExtractionAsync = async () => {
+      try {
     // ---- 4) Baixa TODOS PDFs + chama Gemini --------------------------------
     const startedAt = Date.now();
 
@@ -501,20 +513,49 @@ Deno.serve(async (req: Request) => {
       }).eq('id', extracaoId);
     }
 
+        // Background completou com sucesso — só loga. Cliente vai descobrir
+        // via polling do status do extracoes_ocr.
+        console.log(`[extracao-edital][bg] OK extracao=${extracaoId} itens=${parsed.itens.length} duracao_ms=${duracaoMs}`);
+      } catch (err) {
+        // Background falhou — atualiza DB pro cliente ver via polling.
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[extracao-edital][bg] FALHOU extracao=${extracaoId}: ${msg}`);
+        if (extracaoId) {
+          await admin.from('extracoes_ocr').update({
+            status: 'falha',
+            erro_detalhe: msg,
+            concluido_em: new Date().toISOString(),
+          }).eq('id', extracaoId);
+        }
+        if (licitacaoId) {
+          await admin.from('licitacoes').update({ status: 'erro' }).eq('id', licitacaoId);
+        }
+      }
+    }; // fim runExtractionAsync
+
+    // Dispatch da extração em background. EdgeRuntime.waitUntil é global do
+    // Supabase Edge Runtime (Deno) — mantém a função viva sem bloquear o response.
+    // @ts-expect-error EdgeRuntime é provido pelo runtime Supabase
+    if (typeof EdgeRuntime !== 'undefined') {
+      // @ts-expect-error idem
+      EdgeRuntime.waitUntil(runExtractionAsync());
+    } else {
+      // Fallback dev local: roda sem await
+      runExtractionAsync();
+    }
+
+    // Retorna 202 IMEDIATAMENTE — cliente fica polling /licitacoes/[id]
+    // que recarrega via PollRefresher quando status muda.
     return jsonResponse({
       extracao_id: extracaoId,
       licitacao_id: licitacaoId,
-      itens_extraidos: parsed.itens.length,
-      sub_itens_proprios: subItens.length,
-      tokens_input: result.usage.promptTokenCount ?? null,
-      tokens_output: result.usage.candidatesTokenCount ?? null,
-      custo_usd: result.estimatedCostUsd,
-      duracao_ms: duracaoMs,
-      warnings: extracaoWarnings,
+      status: 'iniciada',
+      message: 'Extração iniciada em background. A página vai recarregar quando terminar.',
       trace_id: traceId,
-    });
+    }, 202);
   } catch (err) {
-    // Failover: marca extração como falha e licitação como erro
+    // Failover do FAST PATH (antes do background começar).
+    // Marca extração como falha e licitação como erro.
     const msg = err instanceof Error ? err.message : String(err);
     const details = err instanceof GeminiError ? err.details : null;
     if (extracaoId) {
