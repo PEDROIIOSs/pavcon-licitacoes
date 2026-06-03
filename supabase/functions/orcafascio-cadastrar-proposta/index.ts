@@ -185,40 +185,63 @@ Deno.serve(async (req: Request) => {
     // Faz GET no budget URL — se 200, OK. Se 302/3xx ou 500, o budget está
     // corrompido e a gente avisa o user pra retentar (não persiste o
     // budget_id inválido).
-    // Pequeno delay também antes da verificação — dá tempo do Orçafascio
-    // finalizar o ajuste linear antes da gente perguntar se o budget abre.
-    await new Promise((r) => setTimeout(r, 1500));
-
+    // Verificação pós-cadastro com retry — Orçafascio leva 5-25s pra fazer
+    // commit interno do budget novo após copy+adjust. Sem retry, a gente
+    // pergunta cedo demais, vê 500 fantasma e descarta budget que ESTAVA OK.
+    // Estratégia: tenta 6 vezes com gap crescente (1.5s, 3s, 5s, 8s, 12s, 15s).
     let propostaVerificada = false;
-    try {
-      const verifyResp = await fetch(
-        `https://app.orcafascio.com/orc/orcamentos/${novoBudgetId}`,
-        {
-          method: 'GET',
-          headers: {
-            Cookie: ctx.session.cookie_header,
-            'User-Agent': 'pavcon-licitacoes/0.1 (proposta-post-verify)',
-            Accept: 'text/html',
+    let ultimoStatus = 0;
+    const delays = [1500, 3000, 5000, 8000, 12000, 15000];
+    for (let tentativa = 0; tentativa < delays.length; tentativa++) {
+      await new Promise((r) => setTimeout(r, delays[tentativa]));
+      try {
+        const verifyResp = await fetch(
+          `https://app.orcafascio.com/orc/orcamentos/${novoBudgetId}`,
+          {
+            method: 'GET',
+            headers: {
+              Cookie: ctx.session.cookie_header,
+              'User-Agent': 'pavcon-licitacoes/0.1 (proposta-post-verify)',
+              Accept: 'text/html',
+            },
+            redirect: 'manual',
           },
-          redirect: 'manual',
-        },
-      );
-      if (verifyResp.status === 200) {
-        propostaVerificada = true;
-      } else if (verifyResp.status >= 500) {
-        warnings.push(
-          `⚠ Orçafascio retornou ${verifyResp.status} ao abrir a proposta criada (budget_id=${novoBudgetId}). ` +
-          `Provavelmente o copy + ajustarValor corrompeu o orçamento. Apague esse orçamento manualmente no Orçafascio e tente de novo.`,
         );
-      } else if (verifyResp.status >= 300 && verifyResp.status < 400) {
-        const location = verifyResp.headers.get('location') ?? '';
+        ultimoStatus = verifyResp.status;
+        if (verifyResp.status === 200) {
+          propostaVerificada = true;
+          if (tentativa > 0) {
+            warnings.push(
+              `Proposta verificada na tentativa ${tentativa + 1} (Orçafascio levou ${
+                delays.slice(0, tentativa + 1).reduce((a, b) => a + b, 0) / 1000
+              }s pra ficar acessível).`,
+            );
+          }
+          break;
+        }
+        // 302 com location pro novo budget = ainda processando, continua retentando
+        // 500 também = pode ser eventual consistency, retenta
+      } catch (e) {
+        ultimoStatus = -1;
+        if (tentativa === delays.length - 1) {
+          warnings.push(`Verificação pós-cadastro falhou (rede): ${e instanceof Error ? e.message.slice(0, 120) : 'erro'}`);
+        }
+      }
+    }
+
+    if (!propostaVerificada) {
+      if (ultimoStatus >= 500) {
         warnings.push(
-          `⚠ Proposta criada mas Orçafascio redirecionou (${verifyResp.status} → ${location.slice(0, 80)}). ` +
-          'Orçamento pode ter sido movido pra lixeira automaticamente. Cheque manualmente.',
+          `⚠ Orçafascio retornou ${ultimoStatus} ao abrir a proposta criada (budget_id=${novoBudgetId}) ` +
+          `mesmo após ${delays.length} tentativas (${delays.reduce((a, b) => a + b, 0) / 1000}s total). ` +
+          `Orçamento ficou corrompido. Apague manual no Orçafascio e tente novamente — pode ser race condition do servidor deles.`,
+        );
+      } else if (ultimoStatus >= 300 && ultimoStatus < 400) {
+        warnings.push(
+          `⚠ Proposta criada mas Orçafascio redirecionou (${ultimoStatus}) após ${delays.length} tentativas. ` +
+          'Orçamento pode estar na lixeira. Confira manualmente.',
         );
       }
-    } catch (e) {
-      warnings.push(`Verificação pós-cadastro da proposta falhou (rede): ${e instanceof Error ? e.message.slice(0, 120) : 'erro'}`);
     }
 
     // ---- 6) Persiste budget_id da proposta na licitação --------------------
