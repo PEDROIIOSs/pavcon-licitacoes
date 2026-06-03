@@ -32,12 +32,12 @@ import {
 import { callGemini, GeminiError } from '../_shared/gemini.ts';
 import { PROMPT_VERSION, SYSTEM_PROMPT } from './prompt.ts';
 
-// Voltado pra gemini-2.5-pro depois de testes mostrarem que o 3.1 Pro
-// Preview com thinking mode leva > 400s em PDFs grandes — estoura o
-// EdgeRuntime.waitUntil. O 2.5 Pro extrai em 120-180s e o problema de JSON
-// corrompido mid-stream que tinha é tratado pelas 3 camadas de recuperação
-// (jsonrepair + truncate-to-valid). Performance > qualidade marginal aqui.
-const GEMINI_MODEL = 'gemini-2.5-pro';
+// Gemini 3.1 Pro Preview (preferência do orçamentista). Combinado com page
+// filtering (corta páginas irrelevantes pra reduzir 30-60% do PDF antes),
+// fica dentro do cap de 400s do EdgeRuntime. SE FOR USAR SEM page filter
+// em PDFs > 2MB com muito anexo, pode estourar — nesse caso, voltar pra
+// gemini-2.5-pro ou ativar page filtering antes de extrair.
+const GEMINI_MODEL = 'gemini-3.1-pro-preview';
 const LLM_PROVIDER = 'gemini';
 const VALID_START_STATUSES = new Set(['rascunho', 'aguardando_extracao']);
 
