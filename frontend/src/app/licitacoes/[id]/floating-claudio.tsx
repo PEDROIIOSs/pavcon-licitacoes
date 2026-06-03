@@ -145,16 +145,77 @@ export function FloatingClaudio({ licitacaoId }: Props) {
   useEffect(() => { localStorage.setItem('claudio_aberto', aberto ? '1' : '0'); }, [aberto]);
   useEffect(() => { localStorage.setItem('claudio_aba', aba); }, [aba]);
 
-  // Análise automática
+  // Análise automática + AUTO-FIX da IA quando detecta pendências.
+  // Filosofia: zero clicks. Se OrçaPav AI consegue corrigir sozinho, ele
+  // corrige. O orçamentista só vê o resultado final.
+  //
+  // Anti-loop: usa sessionStorage pra marcar quais licitações já tiveram
+  // auto-fix tentado nesta sessão do browser. Evita refazer o fix em todo
+  // refresh (Claude API é paga). Reset quando o user navega pra outra aba e
+  // volta, ou fecha/abre o navegador.
   useEffect(() => {
     setCarregando(true);
     analisarLicitacao(licitacaoId)
       .then((r) => {
-        if (r.error) setErro(r.error);
-        else if (r.diagnosticos) setDiagnosticos(r.diagnosticos as Diagnostico[]);
+        if (r.error) {
+          setErro(r.error);
+          return;
+        }
+        if (!r.diagnosticos) return;
+        const diags = r.diagnosticos as Diagnostico[];
+        setDiagnosticos(diags);
+
+        // AUTO-TRIGGER: se tem pendências corrigíveis pelo IA e ainda não
+        // rodamos nesta sessão pra essa licitação, dispara silenciosamente
+        // (sem confirm, sem modal). Aparece o overlay roxo "OrçaPav AI
+        // corrigindo..." pra usuário saber o que tá rolando.
+        const sessionKey = `orcapav_autofix_${licitacaoId}`;
+        const jaRodou = typeof window !== 'undefined' && sessionStorage.getItem(sessionKey);
+        if (!jaRodou && diags.length > 0 && diags.some((d) => d.severidade === 'erro' || d.severidade === 'aviso')) {
+          if (typeof window !== 'undefined') sessionStorage.setItem(sessionKey, '1');
+          // Pequeno delay pra UI montar antes
+          setTimeout(() => disparoAutoFixSilencioso(), 800);
+        }
       })
       .finally(() => setCarregando(false));
   }, [licitacaoId]);
+
+  // Versão silenciosa do auto-fix: sem confirm(), sem mudança de aba forçada.
+  // Mostra atividade só via overlay/chat history (orçamentista vê passivamente).
+  function disparoAutoFixSilencioso() {
+    setErro(null);
+    setChatPensando(true);
+    setHistorico((prev) => [
+      ...prev,
+      { role: 'user', content: '🤖 [auto] OrçaPav AI iniciou correção automática', timestamp: new Date().toISOString() },
+    ]);
+    startTransition(async () => {
+      try {
+        const r = await autoCorrigirComIA(licitacaoId);
+        if (r.error) {
+          // Falha silenciosa do auto — não atrapalha o orçamentista.
+          // Vai aparecer só como mensagem no histórico do chat se o user abrir.
+          setHistorico((prev) => [
+            ...prev,
+            { role: 'assistant', content: `⚠ Auto-correção falhou: ${r.error}`, timestamp: new Date().toISOString() },
+          ]);
+        } else if (r.resposta) {
+          const respostaFmt = r.acoes_executadas && r.acoes_executadas.length > 0
+            ? `${r.resposta}\n\n_(executei ${r.acoes_executadas.length} ação(ões) automaticamente)_`
+            : r.resposta;
+          setHistorico((prev) => [
+            ...prev,
+            { role: 'assistant', content: respostaFmt, timestamp: new Date().toISOString() },
+          ]);
+          // Recarrega diagnósticos pra refletir as correções
+          const ar = await analisarLicitacao(licitacaoId);
+          if (ar.diagnosticos) setDiagnosticos(ar.diagnosticos as Diagnostico[]);
+        }
+      } finally {
+        setChatPensando(false);
+      }
+    });
+  }
 
   // Scroll chat pro fim quando muda histórico
   useEffect(() => {
@@ -363,6 +424,8 @@ export function FloatingClaudio({ licitacaoId }: Props) {
   const totalErros = diagnosticos.filter((d) => d.severidade === 'erro').length;
   const totalAvisos = diagnosticos.filter((d) => d.severidade === 'aviso').length;
   const temPendencia = diagnosticos.length > 0;
+  // Estado visual: IA está rodando agora (chat ou auto-fix silencioso)
+  const iaAtiva = chatPensando;
 
   return (
     <>
@@ -370,18 +433,29 @@ export function FloatingClaudio({ licitacaoId }: Props) {
       {!aberto && (
         <button
           onClick={() => setAberto(true)}
-          className="fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-pavcon-navy text-white shadow-lg ring-4 ring-pavcon-orange/40 transition hover:scale-110 hover:bg-pavcon-navy-dark"
+          className={`fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full text-white shadow-lg ring-4 transition hover:scale-110 ${
+            iaAtiva
+              ? 'animate-pulse bg-pavcon-orange ring-pavcon-orange/60 hover:bg-pavcon-orange-dark'
+              : 'bg-pavcon-navy ring-pavcon-orange/40 hover:bg-pavcon-navy-dark'
+          }`}
           title={
-            temPendencia
-              ? `${totalErros} erro(s), ${totalAvisos} aviso(s) — clique pra abrir o OrçaPav AI`
-              : 'OrçaPav AI — assistente de orçamentos'
+            iaAtiva
+              ? '🤖 OrçaPav AI corrigindo automaticamente… clique pra ver progresso'
+              : temPendencia
+                ? `${totalErros} erro(s), ${totalAvisos} aviso(s) — clique pra abrir o OrçaPav AI`
+                : 'OrçaPav AI — assistente de orçamentos'
           }
           aria-label="Abrir OrçaPav AI"
         >
           <ClaudioAvatar size={32} />
-          {temPendencia && (
+          {temPendencia && !iaAtiva && (
             <span className="absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full bg-red-500 text-xs font-bold text-white ring-2 ring-white">
               {diagnosticos.length}
+            </span>
+          )}
+          {iaAtiva && (
+            <span className="absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-bold text-white ring-2 ring-white">
+              ⚡
             </span>
           )}
         </button>
