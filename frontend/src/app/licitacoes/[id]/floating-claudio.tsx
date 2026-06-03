@@ -9,7 +9,7 @@ import {
   forcarTotalOrcamentoBase,
   salvarMapeamentosCodes,
 } from '@/lib/agente/auto-fixes';
-import { type ChatMensagem, chatComClaudio } from '@/lib/agente/chat';
+import { autoCorrigirComIA, type ChatMensagem, chatComClaudio } from '@/lib/agente/chat';
 
 interface Diagnostico {
   id: number;
@@ -183,6 +183,46 @@ export function FloatingClaudio({ licitacaoId }: Props) {
         setSucesso(r.mensagem ?? `OrçaPav AI aplicou ${r.mudancas ?? 0} mudança(s).`);
         const ar = await analisarLicitacao(licitacaoId);
         if (ar.diagnosticos) setDiagnosticos(ar.diagnosticos as Diagnostico[]);
+      }
+    });
+  }
+
+  // AUTO-CORREÇÃO TOTAL — dispara o agente Claude com tool use em loop
+  // pra resolver TUDO que ele consegue sem perguntar. Quando termina, mostra
+  // o relatório do que foi feito + o que ficou pendente (no chat) + recarrega
+  // os diagnósticos pra refletir as mudanças.
+  function handleAutoCorrigirTudo() {
+    if (!confirm(
+      'OrçaPav AI vai analisar TODOS os erros desta licitação e tentar corrigir automaticamente. ' +
+      'Pode levar 30-60 segundos. Continuar?'
+    )) return;
+    setErro(null);
+    setSucesso(null);
+    setAba('chat'); // muda pra aba chat pra mostrar resposta do agente
+    setChatPensando(true);
+    setHistorico((prev) => [
+      ...prev,
+      { role: 'user', content: '🤖 Auto-corrigir tudo (modo IA autônomo)', timestamp: new Date().toISOString() },
+    ]);
+    startTransition(async () => {
+      try {
+        const r = await autoCorrigirComIA(licitacaoId);
+        if (r.error) {
+          setErro(r.error);
+        } else if (r.resposta) {
+          const respostaFmt = r.acoes_executadas && r.acoes_executadas.length > 0
+            ? `${r.resposta}\n\n_(executei ${r.acoes_executadas.length} ação(ões) automaticamente)_`
+            : r.resposta;
+          setHistorico((prev) => [
+            ...prev,
+            { role: 'assistant', content: respostaFmt, timestamp: new Date().toISOString() },
+          ]);
+          // Recarrega diagnósticos pra refletir as correções aplicadas
+          const ar = await analisarLicitacao(licitacaoId);
+          if (ar.diagnosticos) setDiagnosticos(ar.diagnosticos as Diagnostico[]);
+        }
+      } finally {
+        setChatPensando(false);
       }
     });
   }
@@ -436,6 +476,25 @@ export function FloatingClaudio({ licitacaoId }: Props) {
                   )}
                 </div>
               </div>
+
+              {/* Botão grande de auto-correção IA — aparece quando tem pendências */}
+              {temPendencia && (
+                <button
+                  onClick={handleAutoCorrigirTudo}
+                  disabled={isPending || chatPensando}
+                  className="mb-3 w-full rounded-lg bg-gradient-to-r from-pavcon-navy to-pavcon-navy-dark px-4 py-3 text-left text-white shadow-md transition hover:from-pavcon-navy-dark hover:to-pavcon-navy disabled:opacity-50"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-bold">🤖 IA corrige tudo automaticamente</p>
+                      <p className="mt-0.5 text-[11px] text-white/80">
+                        OrçaPav AI analisa, aplica fixes em loop e te entrega o resultado pronto
+                      </p>
+                    </div>
+                    <span className="text-2xl">→</span>
+                  </div>
+                </button>
+              )}
 
               {erro && <div className="mb-3 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-800">❌ {erro}</div>}
               {sucesso && <div className="mb-3 rounded-md border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-800">✓ {sucesso}</div>}

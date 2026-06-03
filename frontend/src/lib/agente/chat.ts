@@ -101,3 +101,42 @@ export async function chatComClaudio(
     return { error: `Falha de rede: ${e instanceof Error ? e.message : String(e)}` };
   }
 }
+
+// =============================================================================
+// AUTO-CORREÇÃO TOTAL — OrçaPav AI roda em loop até zerar erros
+// =============================================================================
+/**
+ * Dispara o OrçaPav AI em modo "autônomo agressivo":
+ *   1. Coleta TODOS os diagnósticos + warnings + erros conhecidos
+ *   2. Manda pro Claude com instrução explícita "use TODAS as ferramentas que
+ *      precisar, NÃO peça permissão, APLIQUE os fixes diretamente"
+ *   3. O Edge Function já tem loop interno de tool use (MAX_TOOL_LOOPS=8) que
+ *      executa correções em cadeia
+ *   4. Retorna o relatório final + ações executadas
+ *
+ * Goal: orçamentista clica 1 botão e o sistema arruma tudo que dá pra arrumar
+ * sozinho. Erros que precisam de input humano viram instruções claras na
+ * resposta.
+ */
+export async function autoCorrigirComIA(
+  licitacaoId: string,
+): Promise<ChatResultado> {
+  const prompt = `Tarefa: AUTO-CORREÇÃO TOTAL desta licitação.
+
+Você é o OrçaPav AI rodando em modo autônomo. Sua missão:
+
+1. Olhe TODOS os diagnósticos pendentes que vou te passar no contexto.
+2. Pra CADA UM que tem ferramenta apropriada, EXECUTE a tool imediatamente — não me pergunte permissão, não explique antes de fazer, apenas FAÇA.
+3. Use \`obter_estado_atual\` se precisar re-conferir depois de aplicar fixes.
+4. Pra códigos descontinuados (SINAPI/ORSE/SEINFRA antigos), USE \`sugerir_mapeamento_code\` com seu melhor palpite sobre o equivalente moderno baseado na descrição do item. Confiança alta? Aplica. Médio-baixa? Pule e marque pra revisão humana.
+5. Pra códigos com sufixo -ADAP/-A ou "COMPOSIÇÃO XX" mal classificados, use \`executar_auto_fix\` com tipo \`reclassificar_codes_adaptados\`.
+
+Quando terminar todas as ações possíveis, devolva um relatório com:
+- ✓ Quantas correções aplicadas (e quais)
+- ⚠ Quantos erros precisam ação humana (e o que o orçamentista deve fazer pra cada)
+
+Seja conciso. Nada de bla-bla-bla. Vai.`;
+
+  // historico vazio — esta é uma sessão one-shot
+  return chatComClaudio(licitacaoId, [], prompt);
+}
