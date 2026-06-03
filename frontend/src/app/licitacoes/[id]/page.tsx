@@ -126,14 +126,16 @@ export default async function LicitacaoDetailPage({
   const shouldPoll = inFlightStatuses.has(licitacao.status);
 
   return (
-    <div className="min-h-screen">
-      <header className="border-b border-zinc-200 bg-white">
+    <div className="min-h-screen bg-zinc-50">
+      <header className="border-b border-zinc-200 bg-white shadow-sm">
+        {/* Faixa fina navy->orange — identidade Pavcon */}
+        <div className="h-1 w-full bg-gradient-to-r from-pavcon-navy via-pavcon-navy-light to-pavcon-orange" />
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
           <div>
-            <Link href="/dashboard" className="text-xs text-zinc-500 hover:text-zinc-900">
+            <Link href="/dashboard" className="inline-flex items-center gap-1 text-xs font-medium text-pavcon-navy hover:text-pavcon-navy-dark">
               ← Painel
             </Link>
-            <h1 className="mt-1 text-xl font-semibold text-zinc-900">
+            <h1 className="mt-1 text-xl font-bold tracking-tight text-pavcon-coal">
               {licitacao.titulo}
             </h1>
             {licitacao.numero_edital && (

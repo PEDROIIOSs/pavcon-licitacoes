@@ -42,15 +42,13 @@
   --color-pavcon-coal-soft: var(--pavcon-coal-soft);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+/* Dark mode automatico desativado — a identidade Pavcon e light-themed.
+ * O background ficava preto quando o user tinha dark mode no SO e qualquer
+ * area sem bg explicita "vazava" o fundo escuro do body. Mantemos light
+ * em todas as telas. */
 
 body {
-  background: var(--background);
+  background: #f8fafc; /* zinc-50 — base clara consistente com cards brancos */
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }

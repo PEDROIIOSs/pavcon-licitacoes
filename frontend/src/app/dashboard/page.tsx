@@ -71,7 +71,7 @@ export default async function DashboardPage({
   });
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen bg-zinc-50">
       <header className="border-b border-zinc-200 bg-white shadow-sm">
         {/* Faixa fina navy no topo — identidade da marca Pavcon */}
         <div className="h-1 w-full bg-gradient-to-r from-pavcon-navy via-pavcon-navy-light to-pavcon-orange" />
@@ -138,11 +138,17 @@ export default async function DashboardPage({
           </div>
         )}
         <div className="mb-6 flex items-center justify-between">
-          <h2 className="text-xl font-semibold text-zinc-900">Orçamentos</h2>
+          <div>
+            <h2 className="text-2xl font-bold tracking-tight text-pavcon-coal">Orçamentos</h2>
+            <p className="text-xs text-zinc-500">
+              {licitacoes?.length ?? 0} licitação(ões) cadastrada(s)
+            </p>
+          </div>
           <Link
             href="/licitacoes/nova"
-            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800"
+            className="inline-flex items-center gap-2 rounded-md bg-pavcon-navy px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-pavcon-navy-dark"
           >
+            <span className="text-pavcon-orange">+</span>
             Novo orçamento
           </Link>
         </div>
@@ -154,17 +160,20 @@ export default async function DashboardPage({
         )}
 
         {!error && (!licitacoes || licitacoes.length === 0) && (
-          <div className="rounded-lg border border-dashed border-zinc-300 bg-white p-12 text-center">
-            <p className="text-sm text-zinc-500">
-              Nenhum orçamento cadastrado ainda. Clique em <strong>Novo orçamento</strong> pra começar.
+          <div className="rounded-lg border border-dashed border-pavcon-navy/30 bg-white p-12 text-center shadow-sm">
+            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-pavcon-navy-50">
+              <span className="text-2xl text-pavcon-navy">📄</span>
+            </div>
+            <p className="text-sm text-zinc-600">
+              Nenhum orçamento cadastrado ainda. Clique em <strong className="text-pavcon-navy">Novo orçamento</strong> pra começar.
             </p>
           </div>
         )}
 
         {licitacoes && licitacoes.length > 0 && (
-          <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white">
+          <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
             <table className="min-w-full divide-y divide-zinc-200 text-sm">
-              <thead className="bg-zinc-50">
+              <thead className="bg-pavcon-navy-50">
                 <tr>
                   <Th>Título / Edital</Th>
                   <Th>Órgão</Th>
@@ -184,9 +193,9 @@ export default async function DashboardPage({
                       ? valorExtraido - valorRef
                       : null;
                   return (
-                    <tr key={l.id} className="hover:bg-zinc-50">
+                    <tr key={l.id} className="transition hover:bg-pavcon-navy-50/50">
                       <td className="px-4 py-3 align-top">
-                        <Link href={`/licitacoes/${l.id}`} className="font-medium text-zinc-900 hover:underline">
+                        <Link href={`/licitacoes/${l.id}`} className="font-semibold text-pavcon-navy hover:text-pavcon-navy-dark hover:underline">
                           {l.titulo}
                         </Link>
                         {l.numero_edital && (
@@ -206,7 +215,7 @@ export default async function DashboardPage({
                           {statusLabel(l.status)}
                         </span>
                         {l.aguarda_acao_humana && (
-                          <div className="mt-1 text-xs font-medium text-blue-700">
+                          <div className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-pavcon-orange-dark">
                             ⚠ aguarda você
                           </div>
                         )}
