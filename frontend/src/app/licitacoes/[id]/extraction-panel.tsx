@@ -12,6 +12,7 @@ import {
   startExtraction,
   type ExtractedItem,
 } from './actions';
+import { autoCorrigirComIA } from '@/lib/agente/chat';
 import { ExtractionEditor } from './extraction-editor';
 import { ImportJsonModal } from './import-json-modal';
 import { EXTRACTION_PROMPT, NOTEBOOKLM_URL, claudeNewChatUrl } from './prompt';
@@ -169,6 +170,71 @@ export function ExtractionPanel({
     setImportModal(source);
   }
 
+  // Detecta se as warnings do cadastro contêm o padrão que o IA sabe resolver
+  // (códigos descontinuados, codes adaptados mal classificados, addBases 500).
+  function temWarningsCorrigiveisIA(warnings: string[] | undefined): boolean {
+    if (!warnings || warnings.length === 0) return false;
+    return warnings.some((w) =>
+      /provável código descontinuado|adicionar manual|adaptado|-ADAP|COMPOSIÇÃO|addBases falhou/i.test(w)
+    );
+  }
+
+  // Estado pra mostrar overlay enquanto IA está rodando auto-correção
+  const [iaCorrigindo, setIaCorrigindo] = useState<{
+    iteracao: number;
+    mensagem?: string;
+    acoes_aplicadas?: number;
+  } | null>(null);
+
+  // Auto-correção IA com retry: dispara autoCorrigirComIA, depois re-cadastra,
+  // checa se warnings diminuíram, repete até max 3 iterações ou estabilizar.
+  async function tentarAutoCorrigirIA(
+    licId: string,
+    warningsAtuais: string[],
+    iteracao: number,
+    onResult: (warnings: string[]) => void,
+  ): Promise<void> {
+    if (iteracao > 3) {
+      setIaCorrigindo(null);
+      return;
+    }
+    setIaCorrigindo({
+      iteracao,
+      mensagem: `Iteração ${iteracao}/3: IA analisando ${warningsAtuais.length} warning(s)…`,
+    });
+    const r = await autoCorrigirComIA(licId);
+    if (r.error) {
+      // IA falhou — não bloqueia o usuário, ele vê os warnings normalmente
+      setIaCorrigindo(null);
+      return;
+    }
+    const acoesAplicadas = r.acoes_executadas?.length ?? 0;
+    setIaCorrigindo({
+      iteracao,
+      mensagem: `IA aplicou ${acoesAplicadas} ação(ões). Recadastrando…`,
+      acoes_aplicadas: acoesAplicadas,
+    });
+    if (acoesAplicadas === 0) {
+      // IA não conseguiu aplicar nada — para o loop
+      setIaCorrigindo(null);
+      return;
+    }
+    // Re-roda cadastramento pra aplicar mappings/correções
+    const recad = await cadastrarNoOrcafascio(licId);
+    const novasWarnings = recad?.warnings ?? [];
+    onResult(novasWarnings);
+    // Se ainda tem warnings corrigíveis E o número de warnings DIMINUIU
+    // (progresso real), tenta de novo. Senão para.
+    if (
+      temWarningsCorrigiveisIA(novasWarnings) &&
+      novasWarnings.length < warningsAtuais.length
+    ) {
+      await tentarAutoCorrigirIA(licId, novasWarnings, iteracao + 1, onResult);
+    } else {
+      setIaCorrigindo(null);
+    }
+  }
+
   function handleCadastrar() {
     setActionError(null);
     setCadastroResult(null);
@@ -176,13 +242,20 @@ export function ExtractionPanel({
       const r = await cadastrarNoOrcafascio(licitacaoId);
       if (r?.error) {
         setActionError(r.error);
-      } else {
-        setCadastroResult({
-          grupo_descricao: r.grupo_descricao,
-          composicoes_criadas: r.composicoes_criadas,
-          composicoes_puladas: r.composicoes_puladas,
-          itens_adicionados: r.itens_adicionados,
-          warnings: r.warnings,
+        return;
+      }
+      const warnings = r.warnings ?? [];
+      setCadastroResult({
+        grupo_descricao: r.grupo_descricao,
+        composicoes_criadas: r.composicoes_criadas,
+        composicoes_puladas: r.composicoes_puladas,
+        itens_adicionados: r.itens_adicionados,
+        warnings,
+      });
+      // AUTO-TRIGGER do IA quando tiver warnings corrigíveis
+      if (temWarningsCorrigiveisIA(warnings)) {
+        await tentarAutoCorrigirIA(licitacaoId, warnings, 1, (novasWarnings) => {
+          setCadastroResult((prev) => prev ? { ...prev, warnings: novasWarnings } : prev);
         });
       }
     });
@@ -195,18 +268,30 @@ export function ExtractionPanel({
       const r = await cadastrarOrcamentoCompleto(licitacaoId);
       if (r?.error) {
         setActionError(r.error);
-      } else {
-        setOrcamentoResult({
-          budget_id: r.budget_id,
-          budget_url: r.budget_url,
-          etapas_criadas: r.etapas_criadas,
-          composicoes_criadas: r.composicoes_criadas,
-          total_itens_batch: r.total_itens_batch,
-          bdi: r.bdi,
-          leis_sociais_horista: r.leis_sociais_horista,
-          bancos_configurados: r.bancos_configurados,
-          warnings: r.warnings,
-          mybase: r.mybase,
+        return;
+      }
+      const warningsPasso1 = r.mybase?.warnings ?? [];
+      const warningsPasso2 = r.warnings ?? [];
+      const todasWarnings = [...warningsPasso1, ...warningsPasso2];
+      setOrcamentoResult({
+        budget_id: r.budget_id,
+        budget_url: r.budget_url,
+        etapas_criadas: r.etapas_criadas,
+        composicoes_criadas: r.composicoes_criadas,
+        total_itens_batch: r.total_itens_batch,
+        bdi: r.bdi,
+        leis_sociais_horista: r.leis_sociais_horista,
+        bancos_configurados: r.bancos_configurados,
+        warnings: warningsPasso2,
+        mybase: r.mybase,
+      });
+      // AUTO-TRIGGER do IA quando tiver warnings corrigíveis no Passo 1
+      if (temWarningsCorrigiveisIA(todasWarnings)) {
+        await tentarAutoCorrigirIA(licitacaoId, todasWarnings, 1, (novasWarnings) => {
+          setOrcamentoResult((prev) => prev ? {
+            ...prev,
+            mybase: prev.mybase ? { ...prev.mybase, warnings: novasWarnings } : prev.mybase,
+          } : prev);
         });
       }
     });
@@ -424,6 +509,17 @@ export function ExtractionPanel({
               </>
             )}
           </dl>
+          {/* Overlay quando a IA está rodando auto-correção */}
+          {iaCorrigindo && (
+            <div className="mt-2 rounded-lg border-2 border-pavcon-navy bg-gradient-to-r from-pavcon-navy-50 to-pavcon-orange-50 p-3 text-xs">
+              <div className="flex items-center gap-2">
+                <div className="h-2 w-2 animate-pulse rounded-full bg-pavcon-orange" />
+                <p className="font-bold text-pavcon-navy">
+                  🤖 OrçaPav AI corrigindo automaticamente — {iaCorrigindo.mensagem}
+                </p>
+              </div>
+            </div>
+          )}
           {cadastroResult.warnings && cadastroResult.warnings.length > 0 && (
             <details className="mt-2 rounded bg-amber-50 p-2 text-xs text-amber-900">
               <summary className="cursor-pointer">⚠ {cadastroResult.warnings.length} avisos</summary>
