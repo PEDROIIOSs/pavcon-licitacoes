@@ -32,11 +32,12 @@ import {
 import { callGemini, GeminiError } from '../_shared/gemini.ts';
 import { PROMPT_VERSION, SYSTEM_PROMPT } from './prompt.ts';
 
-// Gemini 3.1 Pro Preview (lançado fev/2026). Mais estável em saída
-// estruturada longa que o 2.5 Pro — corrige o bug observado de JSON
-// corrompido mid-stream em planilhas grandes (>10K tokens de output).
-// Janela de contexto: 1M tokens. Endpoint: v1beta.
-const GEMINI_MODEL = 'gemini-3.1-pro-preview';
+// Voltado pra gemini-2.5-pro depois de testes mostrarem que o 3.1 Pro
+// Preview com thinking mode leva > 400s em PDFs grandes — estoura o
+// EdgeRuntime.waitUntil. O 2.5 Pro extrai em 120-180s e o problema de JSON
+// corrompido mid-stream que tinha é tratado pelas 3 camadas de recuperação
+// (jsonrepair + truncate-to-valid). Performance > qualidade marginal aqui.
+const GEMINI_MODEL = 'gemini-2.5-pro';
 const LLM_PROVIDER = 'gemini';
 const VALID_START_STATUSES = new Set(['rascunho', 'aguardando_extracao']);
 
