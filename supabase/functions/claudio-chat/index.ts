@@ -315,20 +315,23 @@ Deno.serve(async (req: Request) => {
   const proxyUrl = Deno.env.get('CLAUDIO_PROXY_URL');
   const proxyToken = Deno.env.get('CLAUDIO_PROXY_TOKEN') ?? '';
 
-  // 3 modos de operação, em ordem de preferência:
-  //   1. Proxy local (Claude Code via subscription Max do orçamentista)
-  //   2. API Anthropic direta (sk-ant-... no Vault)
+  // 3 modos de operação, em ordem de preferência (API > Proxy > Stub):
+  //   1. API Anthropic direta (sk-ant-...) — mais confiável, 24/7
+  //   2. Proxy local (Claude Code via subscription Max) — só se API não tem
   //   3. Stub mode (nenhum dos 2 configurado)
+  // Mudança histórica: prioridade era proxy-first, mas o proxy depende de PC
+  // ligado + Claude Desktop logado como subprocess externo (instável). Quando
+  // a API key está setada, ela é sempre a melhor escolha.
   if (!apiKey && !proxyUrl) {
     return jsonResponse({
       ok: false,
       stub: true,
       resposta:
-        'Oi, sou o Cláudio! 🤖\n\n' +
+        'Oi, sou o OrçaPav AI! 🤖\n\n' +
         'Ainda não fui plugado com a Claude API. O admin precisa configurar:\n' +
         '• `ANTHROPIC_API_KEY` (API direta), OU\n' +
         '• `CLAUDIO_PROXY_URL` (proxy local com Claude Code Max)\n\n' +
-        'Enquanto isso, use o botão "🤖 Cláudio resolver agora" nos diagnósticos detectados ' +
+        'Enquanto isso, use o botão "🤖 OrçaPav AI resolver agora" nos diagnósticos detectados ' +
         'pra eu aplicar auto-fixes determinísticos.',
     });
   }
@@ -349,11 +352,10 @@ Deno.serve(async (req: Request) => {
 
   const acoesExecutadas: Array<{ tool: string; input: unknown; result: unknown }> = [];
 
-  // Despacha pro modo configurado
-  if (proxyUrl) {
-    return await chatViaProxy({
-      proxyUrl,
-      proxyToken,
+  // Despacha pro modo configurado — API tem prioridade.
+  if (apiKey) {
+    return await chatViaAnthropicAPI({
+      apiKey,
       messages,
       licitacaoId: body.licitacao_id!,
       userId,
@@ -362,8 +364,9 @@ Deno.serve(async (req: Request) => {
     });
   }
 
-  return await chatViaAnthropicAPI({
-    apiKey: apiKey!,
+  return await chatViaProxy({
+    proxyUrl: proxyUrl!,
+    proxyToken,
     messages,
     licitacaoId: body.licitacao_id!,
     userId,
