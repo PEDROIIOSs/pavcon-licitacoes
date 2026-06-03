@@ -32,7 +32,11 @@ import {
 import { callGemini, GeminiError } from '../_shared/gemini.ts';
 import { PROMPT_VERSION, SYSTEM_PROMPT } from './prompt.ts';
 
-const GEMINI_MODEL = 'gemini-2.5-pro';
+// Gemini 3.1 Pro Preview (lançado fev/2026). Mais estável em saída
+// estruturada longa que o 2.5 Pro — corrige o bug observado de JSON
+// corrompido mid-stream em planilhas grandes (>10K tokens de output).
+// Janela de contexto: 1M tokens. Endpoint: v1beta.
+const GEMINI_MODEL = 'gemini-3.1-pro-preview';
 const LLM_PROVIDER = 'gemini';
 const VALID_START_STATUSES = new Set(['rascunho', 'aguardando_extracao']);
 

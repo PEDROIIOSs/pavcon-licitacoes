@@ -1,15 +1,16 @@
 // Cliente leve para a API REST do Gemini.
-// Usado pela Edge Function extracao-edital pra enviar PDFs ao Gemini 2.5 Pro
-// e receber JSON estruturado.
+// Usado pela Edge Function extracao-edital pra enviar PDFs ao Gemini
+// (atualmente gemini-3.1-pro-preview) e receber JSON estruturado.
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import { logIntegration } from './audit.ts';
 
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
-// Pricing de janeiro 2026 (gemini-2.5-pro). Atualizar quando mudar.
+// Pricing aproximado de 2026 (gemini-3.1-pro-preview, mesmo tier que 2.5 Pro).
 //   <200K input: $1.25/M tokens   |  >200K: $2.50/M
 //   <200K output: $10.00/M tokens |  >200K: $15.00/M
+// Atualizar conforme Google publica preços oficiais do 3.1.
 const PRICE_INPUT_LOW = 1.25 / 1_000_000;
 const PRICE_INPUT_HIGH = 2.50 / 1_000_000;
 const PRICE_OUTPUT_LOW = 10.0 / 1_000_000;
