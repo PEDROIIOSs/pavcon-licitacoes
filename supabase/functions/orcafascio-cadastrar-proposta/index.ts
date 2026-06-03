@@ -185,78 +185,90 @@ Deno.serve(async (req: Request) => {
     // Faz GET no budget URL — se 200, OK. Se 302/3xx ou 500, o budget está
     // corrompido e a gente avisa o user pra retentar (não persiste o
     // budget_id inválido).
-    // Verificação pós-cadastro com retry — Orçafascio leva 5-25s pra fazer
-    // commit interno do budget novo após copy+adjust. Sem retry, a gente
-    // pergunta cedo demais, vê 500 fantasma e descarta budget que ESTAVA OK.
-    // Estratégia: tenta 6 vezes com gap crescente (1.5s, 3s, 5s, 8s, 12s, 15s).
+    // Verificação pós-cadastro com retry + endpoint alternativo.
+    // Orçafascio tem 2 jeitos de acessar o budget:
+    //   (a) /orc/orcamentos/{id}  — UI clássica, ÀS VEZES retorna 500
+    //   (b) /v2023/bud/budgets/{id}  — API v2023, mais estável
+    // Tenta (a) primeiro, se falhar tenta (b). Se (b) responde OK, considera
+    // que o budget existe e está acessível (a UI clássica pode tar com bug).
     let propostaVerificada = false;
-    let ultimoStatus = 0;
+    let ultimoStatusA = 0;
+    let ultimoStatusB = 0;
     const delays = [1500, 3000, 5000, 8000, 12000, 15000];
-    for (let tentativa = 0; tentativa < delays.length; tentativa++) {
-      await new Promise((r) => setTimeout(r, delays[tentativa]));
+
+    async function verificar(): Promise<{ statusA: number; statusB: number; ok: boolean }> {
+      let statusA = 0;
+      let statusB = 0;
       try {
-        const verifyResp = await fetch(
+        const respA = await fetch(
           `https://app.orcafascio.com/orc/orcamentos/${novoBudgetId}`,
           {
             method: 'GET',
-            headers: {
-              Cookie: ctx.session.cookie_header,
-              'User-Agent': 'pavcon-licitacoes/0.1 (proposta-post-verify)',
-              Accept: 'text/html',
-            },
+            headers: { Cookie: ctx.session.cookie_header, 'User-Agent': 'pavcon/0.1', Accept: 'text/html' },
             redirect: 'manual',
           },
         );
-        ultimoStatus = verifyResp.status;
-        if (verifyResp.status === 200) {
-          propostaVerificada = true;
-          if (tentativa > 0) {
-            warnings.push(
-              `Proposta verificada na tentativa ${tentativa + 1} (Orçafascio levou ${
-                delays.slice(0, tentativa + 1).reduce((a, b) => a + b, 0) / 1000
-              }s pra ficar acessível).`,
-            );
-          }
-          break;
+        statusA = respA.status;
+        if (statusA === 200) return { statusA, statusB: 0, ok: true };
+      } catch {}
+      // Fallback: API v2023 mais estável
+      try {
+        const respB = await fetch(
+          `https://app.orcafascio.com/v2023/bud/budgets/${novoBudgetId}`,
+          {
+            method: 'GET',
+            headers: { Cookie: ctx.session.cookie_header, 'User-Agent': 'pavcon/0.1', Accept: 'application/json' },
+            redirect: 'manual',
+          },
+        );
+        statusB = respB.status;
+        if (statusB >= 200 && statusB < 400) return { statusA, statusB, ok: true };
+      } catch {}
+      return { statusA, statusB, ok: false };
+    }
+
+    for (let tentativa = 0; tentativa < delays.length; tentativa++) {
+      await new Promise((r) => setTimeout(r, delays[tentativa]));
+      const v = await verificar();
+      ultimoStatusA = v.statusA;
+      ultimoStatusB = v.statusB;
+      if (v.ok) {
+        propostaVerificada = true;
+        if (tentativa > 0 || v.statusB > 0) {
+          warnings.push(
+            `Proposta verificada na tentativa ${tentativa + 1} ` +
+            `(UI=${v.statusA}, API_v2023=${v.statusB || 'não testada'}).`,
+          );
         }
-        // 302 com location pro novo budget = ainda processando, continua retentando
-        // 500 também = pode ser eventual consistency, retenta
-      } catch (e) {
-        ultimoStatus = -1;
-        if (tentativa === delays.length - 1) {
-          warnings.push(`Verificação pós-cadastro falhou (rede): ${e instanceof Error ? e.message.slice(0, 120) : 'erro'}`);
-        }
+        break;
       }
     }
 
     if (!propostaVerificada) {
-      if (ultimoStatus >= 500) {
-        warnings.push(
-          `⚠ Orçafascio retornou ${ultimoStatus} ao abrir a proposta criada (budget_id=${novoBudgetId}) ` +
-          `mesmo após ${delays.length} tentativas (${delays.reduce((a, b) => a + b, 0) / 1000}s total). ` +
-          `Orçamento ficou corrompido. Apague manual no Orçafascio e tente novamente — pode ser race condition do servidor deles.`,
-        );
-      } else if (ultimoStatus >= 300 && ultimoStatus < 400) {
-        warnings.push(
-          `⚠ Proposta criada mas Orçafascio redirecionou (${ultimoStatus}) após ${delays.length} tentativas. ` +
-          'Orçamento pode estar na lixeira. Confira manualmente.',
-        );
-      }
+      warnings.push(
+        `⚠ Orçafascio retornou erros ao abrir a proposta criada (budget_id=${novoBudgetId}, ` +
+        `UI=${ultimoStatusA}, API=${ultimoStatusB}) após ${delays.length} tentativas (${delays.reduce((a, b) => a + b, 0) / 1000}s total). ` +
+        `O budget FOI CRIADO no Orçafascio (copy + ajustarValor retornaram OK), mas a abertura via UI está falhando. ` +
+        `Tente abrir o link você mesmo — se abrir, ótimo (bug intermitente do servidor deles). ` +
+        `Se mesmo no seu browser não abrir, apague manualmente no Orçafascio e refaça.`,
+      );
     }
 
     // ---- 6) Persiste budget_id da proposta na licitação --------------------
-    // Só persiste se a verificação passou. Senão, o orçamentista vê o
-    // warning e pode retentar sem o budget_id "fantasma" travar a UI.
-    if (propostaVerificada) {
-      await admin
-        .from('licitacoes')
-        .update({
-          desconto_percentual: desconto,
-          valor_proposta_pavcon: valorProposta,
-          orcafascio_proposta_budget_id: novoBudgetId,
-        })
-        .eq('id', licitacaoId);
-    }
+    // MUDANÇA: persiste o budget_id MESMO quando verificação falha.
+    // Razão: o budget foi criado (logs confirmam 302 success do copy+adjust),
+    // só a verificação do servidor Orçafascio tá com bug intermitente.
+    // Salvar o ID dá a chance do orçamentista abrir o link manualmente —
+    // muitas vezes funciona quando o servidor deles "esquenta".
+    // Se de fato tá quebrado, o user apaga e retenta.
+    await admin
+      .from('licitacoes')
+      .update({
+        desconto_percentual: desconto,
+        valor_proposta_pavcon: valorProposta,
+        orcafascio_proposta_budget_id: novoBudgetId,
+      })
+      .eq('id', licitacaoId);
 
     return jsonResponse({
       ok: propostaVerificada,
