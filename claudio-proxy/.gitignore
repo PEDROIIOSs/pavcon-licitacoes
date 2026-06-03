@@ -1,3 +1,5 @@
 .token.txt
 node_modules
 cloudflared.exe
+.env
+logs/
