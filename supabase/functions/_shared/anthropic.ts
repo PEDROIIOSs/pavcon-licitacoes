@@ -137,6 +137,9 @@ export async function callClaude(opts: CallClaudeOpts): Promise<ClaudeCallResult
         type: (parsed as { type?: string }).type,
         stop_reason: (parsed as { stop_reason?: string }).stop_reason,
         usage: (parsed as { usage?: ClaudeUsage }).usage,
+        // Inclui o objeto `error` da resposta da Anthropic em caso de 4xx/5xx
+        // (mensagem + type). Sem isso, debug de 400 fica cego (só "type:error").
+        error: (parsed as { error?: { type?: string; message?: string } }).error,
       }
       : { raw: rawText.slice(0, 500) },
     duracao_ms: Date.now() - startedAt,

@@ -40,12 +40,11 @@ import { PROMPT_VERSION, SYSTEM_PROMPT } from './prompt.ts';
 // pelas 3 camadas de recuperação (v8): JSON.parse direto + jsonrepair +
 // truncate-to-last-valid. Mais robusto pro pipeline atual.
 const GEMINI_MODEL = 'gemini-2.5-pro';
-// Fallback: Claude Sonnet 4.5 (boa qualidade, custo razoável: $3/$15 por M
-// tokens). Dispara automaticamente quando Gemini falha (5xx, JSON
-// irrecuperável, timeout). Requer credencial Anthropic ativa
-// (provider='anthropic'); sem credencial, fallback é skipado e licitação
-// vira 'falha' (mesmo comportamento de antes).
-const CLAUDE_MODEL = 'claude-sonnet-4-5';
+// Claude Sonnet 4.5 (snapshot 20250929, mesmo usado no claudio-chat).
+// Boa qualidade pra parsing de planilhas complexas, custo $3/$15 por M
+// tokens. Anthropic API exige ID com versão completa — nomes curtos
+// (claude-sonnet-4-5) retornam 400 "invalid model".
+const CLAUDE_MODEL = 'claude-sonnet-4-5-20250929';
 const LLM_PROVIDER = 'gemini';
 const VALID_START_STATUSES = new Set(['rascunho', 'aguardando_extracao']);
 
