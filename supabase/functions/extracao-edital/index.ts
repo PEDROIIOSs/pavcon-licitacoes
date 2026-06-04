@@ -30,6 +30,7 @@ import {
 // Pra trocar pra Claude (Opus), basta cadastrar credencial Anthropic e mudar
 // LLM_PROVIDER abaixo pra 'anthropic' + importar de '../_shared/anthropic.ts'.
 import { callGemini, GeminiError } from '../_shared/gemini.ts';
+import { callClaude, type ClaudeContent } from '../_shared/anthropic.ts';
 import { PROMPT_VERSION, SYSTEM_PROMPT } from './prompt.ts';
 
 // gemini-2.5-pro (definitivo). Tentamos 3.1-pro-preview duas vezes mas com
@@ -39,6 +40,12 @@ import { PROMPT_VERSION, SYSTEM_PROMPT } from './prompt.ts';
 // pelas 3 camadas de recuperação (v8): JSON.parse direto + jsonrepair +
 // truncate-to-last-valid. Mais robusto pro pipeline atual.
 const GEMINI_MODEL = 'gemini-2.5-pro';
+// Fallback: Claude Sonnet 4.5 (boa qualidade, custo razoável: $3/$15 por M
+// tokens). Dispara automaticamente quando Gemini falha (5xx, JSON
+// irrecuperável, timeout). Requer credencial Anthropic ativa
+// (provider='anthropic'); sem credencial, fallback é skipado e licitação
+// vira 'falha' (mesmo comportamento de antes).
+const CLAUDE_MODEL = 'claude-sonnet-4-5';
 const LLM_PROVIDER = 'gemini';
 const VALID_START_STATUSES = new Set(['rascunho', 'aguardando_extracao']);
 
@@ -48,6 +55,10 @@ interface RequestBody {
   // Modo novo (todos os arquivos da licitação). Preferido.
   licitacao_id?: string;
   trace_id?: string;
+  // Escolha do provedor LLM. Default 'gemini' (mais barato, ~85% dos casos).
+  // 'anthropic' usa Claude Sonnet 4.5 — melhor parsing de planilhas complexas,
+  // ~5× mais caro mas raramente trunca. Requer credencial anthropic ativa.
+  provider?: 'gemini' | 'anthropic';
 }
 
 interface ExtractedItem {
@@ -124,6 +135,9 @@ Deno.serve(async (req: Request) => {
   const admin = getServiceRoleClient();
   let licitacaoId: string | null = body.licitacao_id?.trim() ?? null;
   let extracaoId: string | null = null;
+  // Provider escolhido pelo usuário: 'gemini' (default) ou 'anthropic'.
+  const providerEscolhido: 'gemini' | 'anthropic' =
+    body.provider === 'anthropic' ? 'anthropic' : 'gemini';
 
   try {
     const user = await requireAuthenticatedUser(req);
@@ -210,6 +224,36 @@ Deno.serve(async (req: Request) => {
       return errorResponse(500, 'Vault não retornou a API key do Gemini.', vaultErr?.message);
     }
 
+    // ---- 2.5) Credencial Anthropic (obrigatória se provider='anthropic') ----
+    let anthropicApiKey: string | null = null;
+    if (providerEscolhido === 'anthropic') {
+      const { data: aCreds, error: aCredsErr } = await admin
+        .from('api_credentials')
+        .select('id, vault_secret_id, ativo, escopo, owner_id')
+        .eq('provider', 'anthropic')
+        .eq('ativo', true)
+        .order('escopo', { ascending: true });
+      if (aCredsErr) {
+        return errorResponse(500, 'Falha ao listar credenciais Anthropic.', aCredsErr.message);
+      }
+      const aCred = aCreds?.find((c) =>
+        c.escopo === 'organizacional' || c.owner_id === user.id
+      );
+      if (!aCred) {
+        return errorResponse(
+          422,
+          'Nenhuma credencial Anthropic ativa cadastrada. Use o botão Gemini ou peça pro admin cadastrar.',
+        );
+      }
+      const { data: aKey, error: aVaultErr } = await admin.rpc('read_vault_secret', {
+        p_secret_id: aCred.vault_secret_id,
+      });
+      if (aVaultErr || typeof aKey !== 'string' || !aKey) {
+        return errorResponse(500, 'Vault não retornou a API key Anthropic.', aVaultErr?.message);
+      }
+      anthropicApiKey = aKey;
+    }
+
     // ---- 3) Transição: rascunho → aguardando_extracao (se preciso) → extraindo
     // A máquina de estados (validate_licitacao_status_transition) exige passar
     // por aguardando_extracao antes de extraindo.
@@ -240,8 +284,8 @@ Deno.serve(async (req: Request) => {
       .insert({
         licitacao_id: licitacaoId,
         arquivo_id: arquivoPrincipal.id,
-        llm_provider: LLM_PROVIDER,
-        llm_model: GEMINI_MODEL,
+        llm_provider: providerEscolhido,
+        llm_model: providerEscolhido === 'anthropic' ? CLAUDE_MODEL : GEMINI_MODEL,
         prompt_versao: PROMPT_VERSION,
         status: 'processando',
       })
@@ -275,19 +319,17 @@ Deno.serve(async (req: Request) => {
       anexo: 'Anexo (BDI, leis sociais ou outro)',
     };
 
-    const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
-      { text: SYSTEM_PROMPT },
-    ];
+    // Texto introdutório quando há mais de um PDF (mesma copy nos 2 providers)
+    const introMultiArquivo = arquivos.length > 1
+      ? `\nESTE EDITAL FOI ENVIADO EM ${arquivos.length} ARQUIVOS. A ordem dos PDFs anexados abaixo é:\n` +
+        arquivos.map((a, i) =>
+          `  [${i + 1}] ${tipoLabel[a.tipo] ?? a.tipo} — ${a.filename_original}`
+        ).join('\n') +
+        '\nLeia todos antes de produzir o JSON. Use a planilha orçamentária como fonte primária dos itens, e o memorial/anexos pra preencher cabecalho (BDI, leis sociais, desoneração) e detalhes de composições próprias.\n'
+      : '';
 
-    if (arquivos.length > 1) {
-      parts.push({
-        text: `\nESTE EDITAL FOI ENVIADO EM ${arquivos.length} ARQUIVOS. A ordem dos PDFs anexados abaixo é:\n` +
-          arquivos.map((a, i) =>
-            `  [${i + 1}] ${tipoLabel[a.tipo] ?? a.tipo} — ${a.filename_original}`
-          ).join('\n') +
-          '\nLeia todos antes de produzir o JSON. Use a planilha orçamentária como fonte primária dos itens, e o memorial/anexos pra preencher cabecalho (BDI, leis sociais, desoneração) e detalhes de composições próprias.\n',
-      });
-    }
+    // Baixa todos os PDFs em base64 uma única vez (compartilhado entre providers)
+    const pdfsBase64: Array<{ filename: string; b64: string }> = [];
     for (const a of arquivos) {
       const { data: blob, error: dlErr } = await admin
         .storage
@@ -297,22 +339,85 @@ Deno.serve(async (req: Request) => {
         throw new Error(`Falha ao baixar "${a.filename_original}" do Storage: ${dlErr?.message ?? 'sem dado'}`);
       }
       const buffer = new Uint8Array(await blob.arrayBuffer());
-      parts.push({
-        inlineData: { mimeType: 'application/pdf', data: uint8ToBase64(buffer) },
-      });
+      pdfsBase64.push({ filename: a.filename_original, b64: uint8ToBase64(buffer) });
     }
 
-    const result = await callGemini({
-      model: GEMINI_MODEL,
-      apiKey,
-      parts,
-      responseJson: true,
-      temperature: 0.1,
-      admin,
-      callerUserId: user.id,
-      licitacaoId,
-      traceId,
-    });
+    // Chama o provider escolhido. Ambos retornam { text } pra o pipeline
+    // de parse/validação ser identico abaixo. Usage normalizado pra
+    // {promptTokenCount, candidatesTokenCount} (formato Gemini histórico)
+    // pra não precisar mexer no UPDATE de extracoes_ocr abaixo.
+    let resultText: string | null;
+    let resultUsage = { promptTokenCount: 0, candidatesTokenCount: 0 };
+    let resultCustoUsd = 0;
+    if (providerEscolhido === 'anthropic') {
+      // Claude: systemPrompt vai em campo separado; userContent leva intro
+      // + documentos PDF como inputs do tipo `document`.
+      const claudeUserContent: ClaudeContent[] = [];
+      if (introMultiArquivo) claudeUserContent.push({ type: 'text', text: introMultiArquivo });
+      for (const pdf of pdfsBase64) {
+        claudeUserContent.push({
+          type: 'document',
+          source: { type: 'base64', media_type: 'application/pdf', data: pdf.b64 },
+        });
+      }
+      // Pedido explícito no final pra ele só responder com JSON (sem
+      // explicações em texto) — Claude tende a adicionar prosa.
+      claudeUserContent.push({
+        type: 'text',
+        text: 'Responda APENAS com o JSON do edital extraído, sem texto antes ou depois. Comece com `{` e termine com `}`.',
+      });
+      const r = await callClaude({
+        model: CLAUDE_MODEL,
+        apiKey: anthropicApiKey!,
+        systemPrompt: SYSTEM_PROMPT,
+        userContent: claudeUserContent,
+        maxTokens: 16000,
+        temperature: 0.1,
+        admin,
+        callerUserId: user.id,
+        licitacaoId,
+        traceId,
+      });
+      resultText = r.text;
+      resultUsage = {
+        promptTokenCount: r.usage.input_tokens ?? 0,
+        candidatesTokenCount: r.usage.output_tokens ?? 0,
+      };
+      resultCustoUsd = r.estimatedCostUsd;
+    } else {
+      // Gemini: parts levam system prompt + intro + PDFs como inlineData.
+      const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
+        { text: SYSTEM_PROMPT },
+      ];
+      if (introMultiArquivo) parts.push({ text: introMultiArquivo });
+      for (const pdf of pdfsBase64) {
+        parts.push({ inlineData: { mimeType: 'application/pdf', data: pdf.b64 } });
+      }
+      const r = await callGemini({
+        model: GEMINI_MODEL,
+        apiKey,
+        parts,
+        responseJson: true,
+        temperature: 0.1,
+        admin,
+        callerUserId: user.id,
+        licitacaoId,
+        traceId,
+      });
+      resultText = r.text;
+      resultUsage = {
+        promptTokenCount: r.usage.promptTokenCount ?? 0,
+        candidatesTokenCount: r.usage.candidatesTokenCount ?? 0,
+      };
+      resultCustoUsd = r.estimatedCostUsd;
+    }
+    // Resto do código espera result.text/usage/estimatedCostUsd —
+    // mantém compatibilidade com o UPDATE de extracoes_ocr abaixo.
+    const result = {
+      text: resultText,
+      usage: resultUsage,
+      estimatedCostUsd: resultCustoUsd,
+    };
     const duracaoMs = Date.now() - startedAt;
 
     // ---- 5) Parse + validação --------------------------------------------------

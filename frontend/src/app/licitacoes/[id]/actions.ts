@@ -188,6 +188,7 @@ export async function cortarPaginasPdf(
 export async function startExtraction(
   licitacaoId: string,
   _arquivoId: string | null,
+  provider: 'gemini' | 'anthropic' = 'gemini',
 ): Promise<ActionResult> {
   const supabase = await createClient();
   const {
@@ -202,8 +203,9 @@ export async function startExtraction(
       Authorization: `Bearer ${session.access_token}`,
       'Content-Type': 'application/json',
     },
-    // Manda licitacao_id pra função processar TODOS os arquivos da licitação
-    body: JSON.stringify({ licitacao_id: licitacaoId }),
+    // Manda licitacao_id pra função processar TODOS os arquivos da licitação.
+    // provider escolhe o LLM (gemini default; anthropic = Claude Sonnet 4.5).
+    body: JSON.stringify({ licitacao_id: licitacaoId, provider }),
   });
   const text = await res.text();
   let body: unknown;

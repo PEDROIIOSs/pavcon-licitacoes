@@ -93,11 +93,11 @@ export function ExtractionPanel({
   const isDone = ['fase1_concluida', 'criando_orcamento_base', 'finalizado'].includes(status);
   const isError = status === 'erro';
 
-  function handleStart() {
+  function handleStart(provider: 'gemini' | 'anthropic' = 'gemini') {
     if (!arquivoId) return;
     setActionError(null);
     startTransition(async () => {
-      const r = await startExtraction(licitacaoId, arquivoId);
+      const r = await startExtraction(licitacaoId, arquivoId, provider);
       if (r?.error) setActionError(`${r.error}${r.details ? ': ' + JSON.stringify(r.details).slice(0, 200) : ''}`);
     });
   }
@@ -536,7 +536,7 @@ export function ExtractionPanel({
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             {/* Opção 1 — Gemini API automática */}
             <button
-              onClick={handleStart}
+              onClick={() => handleStart('gemini')}
               disabled={isPending}
               className="rounded-md border border-zinc-300 bg-white p-4 text-left hover:bg-zinc-50 disabled:opacity-50"
             >
@@ -544,7 +544,7 @@ export function ExtractionPanel({
                 ⚡ Gemini API (automático)
               </p>
               <p className="mt-1 text-xs text-zinc-600">
-                Roda a Edge Function chamando Gemini 3.1 Pro Preview. 2–5 min, ~$0.50/edital.
+                Roda a Edge Function chamando Gemini 2.5 Pro. 2–5 min, ~$0.50/edital.
               </p>
             </button>
 
@@ -563,18 +563,18 @@ export function ExtractionPanel({
               </p>
             </button>
 
-            {/* Opção 3 — Claude.ai */}
+            {/* Opção 3 — Claude API automática (substitui o antigo Claude 1-clique manual) */}
             <button
-              onClick={() => openManualExtraction('claude_code')}
+              onClick={() => handleStart('anthropic')}
               disabled={isPending}
-              className="rounded-md border border-zinc-300 bg-white p-4 text-left hover:bg-zinc-50 disabled:opacity-50"
+              className="rounded-md border border-pavcon-orange/40 bg-pavcon-orange-50/30 p-4 text-left hover:bg-pavcon-orange-50 disabled:opacity-50"
             >
               <p className="text-sm font-semibold text-zinc-900">
-                🤖 Claude (1 clique)
+                🤖 Claude API (automático)
               </p>
               <p className="mt-1 text-xs text-zinc-600">
-                Abre o Claude com prompt já pre-preenchido. Você só anexa o PDF e
-                envia.
+                Roda a Edge Function chamando Claude Sonnet 4.5. ~3–6 min, melhor pra
+                planilhas complexas que truncam no Gemini. ~$2/edital.
               </p>
             </button>
           </div>
