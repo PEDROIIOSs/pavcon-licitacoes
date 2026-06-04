@@ -574,23 +574,26 @@ Deno.serve(async (req: Request) => {
           .replace(/^_|_$/g, '')
           .slice(0, 40);
 
-      // Code da composição no MyBase: seguir o nome do edital sem prefixos.
-      // Feedback do orçamentista (Estádio Batalha): "evitar muitas variações no
-      // nome, seguir sempre o código usado pelo órgão — ex: COMPOSIÇÃO 09".
-      // Estratégia:
-      //   - codigo do edital existe → usa só ele sanitizado ("COMPOSIÇÃO 09" → "COMPOSICAO_09")
-      //   - codigo do edital ausente → fallback pra "COMPOSIC_<item_codigo>"
+      // Code da composição no MyBase com PREFIXO da licitação.
+      // BUG CRÍTICO (batalha teste, jun/2026): editais diferentes usavam
+      // codes genéricos (COMP01, COMP02 etc) que colidiam entre licitações
+      // no MyBase. Quando licitação A criava COMP01="Admin Local" e
+      // licitação B tentava criar COMP01="Locação obra", findCompositionByCode
+      // achava o antigo e reusava — qty da B × PU da A = total absurdo
+      // (visto: locação 1077m² × R$ 4.851 = R$ 5.228.008 de "locação").
       //
-      // RISCO conhecido: 2 editais diferentes com mesmo `codigo` (ex: ambos
-      // têm "ADM_LOCAL") podem colidir no MyBase via findCompositionByCode.
-      // Mitigação: `second_code` carrega LICITACAO_<id_short>_<item> pra
-      // rastreabilidade. Se colisão atrapalhar na prática, adicionar sufixo
-      // diferenciador depois.
-      const codigo = (
+      // Fix: prefixar com 6 primeiros chars do licitacao_id. Cada licitação
+      // tem seu próprio "namespace" no MyBase. Trade-off: MyBase cresce
+      // (X comps × Y licitações) mas sem colisão silenciosa entre orçamentos.
+      // O mesmo prefix é aplicado no cadastrar-orcamento (mybaseCode) pra
+      // garantir match.
+      const licShort = licitacaoId.slice(0, 6).toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const codigoBase = (
         comp.codigo && comp.codigo.trim()
           ? sanitize(comp.codigo)
           : `COMPOSIC_${sanitize(comp.item_codigo)}`
-      ).slice(0, 50);
+      );
+      const codigo = `${licShort}_${codigoBase}`.slice(0, 50);
       const descricao = (comp.descricao ?? 'Composição própria do edital').slice(0, 500);
       const unidade = (comp.unidade ?? 'Un').slice(0, 20);
 

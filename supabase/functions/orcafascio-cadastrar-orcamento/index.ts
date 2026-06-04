@@ -492,13 +492,17 @@ Deno.serve(async (req: Request) => {
             .replace(/[^A-Z0-9_-]/g, '_')
             .replace(/_+/g, '_').replace(/^_|_$/g, '')
             .slice(0, 40);
-        // Code sem sufixo (espelha cadastrar-edital): segue o nome do edital
-        // pra orçamentista reconhecer "COMPOSIÇÃO 09" em vez de "COMPOSICAO_09_5_2_1".
-        const mybaseCode = (
+        // Code com PREFIXO da licitação — espelha cadastrar-edital pra
+        // garantir que orçamento e MyBase apontem pra mesma composição
+        // (sem colisão silenciosa entre licitações com codes genéricos
+        // como COMP01). Vide comentário no cadastrar-edital pra contexto.
+        const licShort = licitacaoId.slice(0, 6).toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const codigoBase = (
           c.codigo && (c.codigo as string).trim()
             ? sanitize(c.codigo as string)
             : `COMPOSIC_${sanitize(c.item_codigo as string)}`
-        ).slice(0, 50);
+        );
+        const mybaseCode = `${licShort}_${codigoBase}`.slice(0, 50);
         const code = isPropria ? mybaseCode : (c.codigo ?? '');
         if (!code) continue;
         if (isPropria && !c.orcafascio_composition_id) continue;
