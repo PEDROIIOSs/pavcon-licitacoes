@@ -731,13 +731,27 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      // SEMPRE tenta adicionar items, mesmo se a composição já tem alguns
-      // (caso comum em retry após cadastro parcial). O Orçafascio rejeita
-      // duplicados com 422 "already_in_use" que o fallback item-a-item
-      // trata como sucesso silencioso. Isso garante que retries DEPOIS de
-      // um cadastro com erros 500 silenciosos consigam preencher os
-      // sub-items que ficaram faltando.
-      if (items.length > 0) {
+      // BUG CRÍTICO (SEFIR Pavussu, jun/2026): editais multi-rua repetem o
+      // MESMO código de composição PRÓPRIA (ex: "COMPOSIÇÃO 04" pra
+      // pavimentação em paralelepípedo aparece em 5 ruas). O laço processa
+      // os 5 — primeira itera CRIA a composição com N sub-items; iterações
+      // 2-5 fazem findCompositionByCode e REUSAM a mesma composição.
+      // Antes a lógica era "SEMPRE addItems" porque Orçafascio rejeitaria
+      // duplicados com 422 already_in_use. NA PRÁTICA isso é falso em
+      // batch mode — a API aceita e duplica os sub-items. Resultado:
+      // PU da composição inflado 5× → orçamento total 2× o real.
+      //
+      // FIX: só adiciona items se composição foi CRIADA AGORA ou está
+      // VAZIA (itensJaExistentes === 0). Em retries de cadastros parciais
+      // a composição que estava vazia continua sendo preenchida; em
+      // composições reusadas (mesmo código já apareceu antes nesta licitação)
+      // a 2ª iteração não duplica.
+      const composicaoJaPopulada = !foiCriadaAgora && itensJaExistentes > 0;
+      if (items.length > 0 && composicaoJaPopulada) {
+        // Reusada e já tem sub-items: pula o addItems pra evitar
+        // duplicação. Conta como sucesso silencioso (composição já está OK).
+        itensAdicionados += items.length;
+      } else if (items.length > 0) {
         try {
           await addItemsToComposition(ctx, created.id, items);
           itensAdicionados += items.length;
