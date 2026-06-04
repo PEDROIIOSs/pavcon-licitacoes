@@ -19,15 +19,20 @@ import express from 'express';
 import cors from 'cors';
 import { spawn } from 'child_process';
 import { setTimeout as delay } from 'timers/promises';
+import { mkdtemp, writeFile, rm } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 const PORT = process.env.PORT || 3001;
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
-const TIMEOUT_MS = Number(process.env.CLAUDE_TIMEOUT_MS || 120000); // 2 min
+const TIMEOUT_MS = Number(process.env.CLAUDE_TIMEOUT_MS || 120000); // 2 min /chat
+const EXTRACT_TIMEOUT_MS = Number(process.env.CLAUDE_EXTRACT_TIMEOUT_MS || 600000); // 10 min /extract
 const AUTH_TOKEN = process.env.CLAUDIO_PROXY_TOKEN || '';
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '5mb' }));
+// Limite alto pra aceitar PDFs grandes (até 50MB de base64).
+app.use(express.json({ limit: '60mb' }));
 
 // =============================================================================
 // Middleware: autenticação opcional via Bearer token
@@ -126,13 +131,99 @@ app.post('/chat', async (req, res) => {
 });
 
 // =============================================================================
+// POST /extract — Extrai dados estruturados de PDFs via Claude Code
+// =============================================================================
+// Body:
+//   {
+//     "system": "system prompt (mesmo do extracao-edital)",
+//     "user_intro": "texto introdutório opcional",
+//     "pdfs": [{ filename: "ANEXO.pdf", b64: "JVBERi0xL..." }, ...],
+//     "trailing_instruction": "Responda APENAS com JSON..."
+//   }
+//
+// Estratégia: escreve os PDFs num diretório temporário, monta um prompt
+// que referencia os arquivos por path, invoca `claude -p` com cwd
+// apontando pra esse diretório. O Claude Code usa a tool Read pra ler
+// cada PDF (suporta PDFs nativamente desde out/2024) e produz a resposta.
+//
+// Não usamos --output-format json porque queremos o texto bruto da
+// resposta (que vai ser JSON do edital). O parser do Edge Function já
+// trata fences markdown, jsonrepair, etc.
+// =============================================================================
+app.post('/extract', async (req, res) => {
+  const { system, user_intro, pdfs, trailing_instruction } = req.body || {};
+  if (!Array.isArray(pdfs) || pdfs.length === 0) {
+    return res.status(400).json({ error: 'pdfs obrigatório (array não vazio com {filename, b64}).' });
+  }
+
+  const startedAt = Date.now();
+  const tmp = await mkdtemp(join(tmpdir(), 'claudio-extract-'));
+  console.log(`[claudio-proxy] /extract: ${pdfs.length} PDF(s) em ${tmp}`);
+
+  try {
+    // 1) Escreve cada PDF em arquivo temporário
+    const writtenFiles = [];
+    for (let i = 0; i < pdfs.length; i++) {
+      const safeFilename = (pdfs[i].filename ?? `arquivo_${i + 1}.pdf`)
+        .replace(/[^\w.-]/g, '_')
+        .slice(0, 80);
+      const fpath = join(tmp, safeFilename);
+      const buf = Buffer.from(pdfs[i].b64, 'base64');
+      await writeFile(fpath, buf);
+      writtenFiles.push(safeFilename);
+    }
+
+    // 2) Monta prompt: pede pro Claude ler cada arquivo e responder com JSON.
+    // Mantém system separado via --append-system-prompt.
+    const partes = [];
+    if (user_intro) partes.push(user_intro);
+    partes.push(
+      `Os seguintes PDFs estão disponíveis no diretório atual. ` +
+      `Use a tool Read pra ler CADA UM antes de produzir o JSON:`,
+    );
+    partes.push(writtenFiles.map((f, i) => `  ${i + 1}. ${f}`).join('\n'));
+    if (trailing_instruction) partes.push(trailing_instruction);
+    const promptCompleto = partes.join('\n\n');
+
+    // 3) Invoca o CLI com cwd no diretório dos PDFs
+    const args = ['--print', '--output-format', 'text'];
+    if (system) args.push('--append-system-prompt', system);
+
+    const result = await executarClaude(args, promptCompleto, {
+      cwd: tmp,
+      timeoutMs: EXTRACT_TIMEOUT_MS,
+    });
+    const duration = Date.now() - startedAt;
+    console.log(`[claudio-proxy] /extract resposta em ${(duration / 1000).toFixed(1)}s (${result.stdout.length} chars)`);
+    res.json({
+      ok: true,
+      text: result.stdout.trim(),
+      via: 'claude-code-cli',
+      duration_ms: duration,
+      pdfs_lidos: writtenFiles.length,
+    });
+  } catch (e) {
+    console.error('[claudio-proxy] /extract erro:', e);
+    res.status(500).json({
+      error: e instanceof Error ? e.message : String(e),
+      duration_ms: Date.now() - startedAt,
+    });
+  } finally {
+    // 4) Limpa temp dir (best-effort)
+    try { await rm(tmp, { recursive: true, force: true }); } catch {}
+  }
+});
+
+// =============================================================================
 // Helper: executa CLI claude com timeout
 // =============================================================================
-function executarClaude(args, stdinInput) {
+function executarClaude(args, stdinInput, opts = {}) {
+  const timeoutMs = opts.timeoutMs ?? TIMEOUT_MS;
   return new Promise((resolve, reject) => {
     const proc = spawn(CLAUDE_BIN, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env },
+      cwd: opts.cwd, // undefined → diretório atual (default)
     });
 
     let stdout = '';
@@ -166,13 +257,13 @@ function executarClaude(args, stdinInput) {
       proc.stdin.end();
     }
 
-    // Timeout
+    // Timeout (configurável: /chat usa TIMEOUT_MS, /extract usa EXTRACT_TIMEOUT_MS)
     (async () => {
-      await delay(TIMEOUT_MS);
+      await delay(timeoutMs);
       if (!finalizado) {
         finalizado = true;
         proc.kill('SIGTERM');
-        reject(new Error(`Timeout (${TIMEOUT_MS}ms) — claude CLI travou ou levou demais.`));
+        reject(new Error(`Timeout (${timeoutMs}ms) — claude CLI travou ou levou demais.`));
       }
     })();
   });
@@ -192,6 +283,7 @@ app.listen(PORT, () => {
   console.log('╠════════════════════════════════════════════════════════════╣');
   console.log('║  Healthcheck: http://localhost:' + PORT + '/health                  ║');
   console.log('║  Chat:        POST http://localhost:' + PORT + '/chat              ║');
+  console.log('║  Extract:     POST http://localhost:' + PORT + '/extract           ║');
   console.log('╚════════════════════════════════════════════════════════════╝');
   console.log('');
   console.log('Próximo passo: expor publicamente via Cloudflare Tunnel.');

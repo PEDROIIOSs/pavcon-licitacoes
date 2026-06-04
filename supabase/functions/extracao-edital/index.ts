@@ -223,34 +223,46 @@ Deno.serve(async (req: Request) => {
       return errorResponse(500, 'Vault não retornou a API key do Gemini.', vaultErr?.message);
     }
 
-    // ---- 2.5) Credencial Anthropic (obrigatória se provider='anthropic') ----
+    // ---- 2.5) Configuração Claude: proxy local OU API key Anthropic --------
+    // Quando provider='anthropic', prefere a env CLAUDIO_PROXY_URL+TOKEN
+    // (subscription Claude Max via Claude Code CLI rodando na máquina do
+    // orçamentista). Sem proxy, cai pra API key Anthropic (créditos próprios).
+    // Sem nenhum dos dois, retorna 422.
     let anthropicApiKey: string | null = null;
+    let claudioProxyUrl: string | null = null;
+    let claudioProxyToken: string | null = null;
     if (providerEscolhido === 'anthropic') {
-      const { data: aCreds, error: aCredsErr } = await admin
-        .from('api_credentials')
-        .select('id, vault_secret_id, ativo, escopo, owner_id')
-        .eq('provider', 'anthropic')
-        .eq('ativo', true)
-        .order('escopo', { ascending: true });
-      if (aCredsErr) {
-        return errorResponse(500, 'Falha ao listar credenciais Anthropic.', aCredsErr.message);
-      }
-      const aCred = aCreds?.find((c) =>
-        c.escopo === 'organizacional' || c.owner_id === user.id
-      );
-      if (!aCred) {
-        return errorResponse(
-          422,
-          'Nenhuma credencial Anthropic ativa cadastrada. Use o botão Gemini ou peça pro admin cadastrar.',
+      claudioProxyUrl = Deno.env.get('CLAUDIO_PROXY_URL') ?? null;
+      claudioProxyToken = Deno.env.get('CLAUDIO_PROXY_TOKEN') ?? null;
+
+      if (!claudioProxyUrl) {
+        // Fallback pra API key direta
+        const { data: aCreds, error: aCredsErr } = await admin
+          .from('api_credentials')
+          .select('id, vault_secret_id, ativo, escopo, owner_id')
+          .eq('provider', 'anthropic')
+          .eq('ativo', true)
+          .order('escopo', { ascending: true });
+        if (aCredsErr) {
+          return errorResponse(500, 'Falha ao listar credenciais Anthropic.', aCredsErr.message);
+        }
+        const aCred = aCreds?.find((c) =>
+          c.escopo === 'organizacional' || c.owner_id === user.id
         );
+        if (!aCred) {
+          return errorResponse(
+            422,
+            'Sem CLAUDIO_PROXY_URL e sem credencial Anthropic ativa. Configure uma das duas.',
+          );
+        }
+        const { data: aKey, error: aVaultErr } = await admin.rpc('read_vault_secret', {
+          p_secret_id: aCred.vault_secret_id,
+        });
+        if (aVaultErr || typeof aKey !== 'string' || !aKey) {
+          return errorResponse(500, 'Vault não retornou a API key Anthropic.', aVaultErr?.message);
+        }
+        anthropicApiKey = aKey;
       }
-      const { data: aKey, error: aVaultErr } = await admin.rpc('read_vault_secret', {
-        p_secret_id: aCred.vault_secret_id,
-      });
-      if (aVaultErr || typeof aKey !== 'string' || !aKey) {
-        return errorResponse(500, 'Vault não retornou a API key Anthropic.', aVaultErr?.message);
-      }
-      anthropicApiKey = aKey;
     }
 
     // ---- 3) Transição: rascunho → aguardando_extracao (se preciso) → extraindo
@@ -348,9 +360,35 @@ Deno.serve(async (req: Request) => {
     let resultText: string | null;
     let resultUsage = { promptTokenCount: 0, candidatesTokenCount: 0 };
     let resultCustoUsd = 0;
-    if (providerEscolhido === 'anthropic') {
-      // Claude: systemPrompt vai em campo separado; userContent leva intro
-      // + documentos PDF como inputs do tipo `document`.
+    if (providerEscolhido === 'anthropic' && claudioProxyUrl) {
+      // Caminho A: proxy local (Claude Code CLI com sub Max). Sem custo
+      // direto por extração (usa a cota da subscription).
+      const proxyBody = {
+        system: SYSTEM_PROMPT,
+        user_intro: introMultiArquivo,
+        pdfs: pdfsBase64.map((p) => ({ filename: p.filename, b64: p.b64 })),
+        trailing_instruction:
+          'Responda APENAS com o JSON do edital extraído, sem texto antes ou depois. Comece com `{` e termine com `}`.',
+      };
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (claudioProxyToken) headers['Authorization'] = `Bearer ${claudioProxyToken}`;
+      const proxyResp = await fetch(`${claudioProxyUrl.replace(/\/$/, '')}/extract`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(proxyBody),
+      });
+      const proxyJson = await proxyResp.json().catch(() => ({}));
+      if (!proxyResp.ok || !proxyJson.ok) {
+        throw new Error(
+          `Cláudio proxy /extract falhou (${proxyResp.status}): ${proxyJson.error ?? proxyJson.text?.slice(0, 200) ?? 'sem detalhes'}`,
+        );
+      }
+      resultText = proxyJson.text ?? null;
+      // Sem tokens/custo via proxy (CLI não expõe usage)
+      resultUsage = { promptTokenCount: 0, candidatesTokenCount: 0 };
+      resultCustoUsd = 0;
+    } else if (providerEscolhido === 'anthropic') {
+      // Caminho B: Anthropic API direta (consome créditos console.anthropic.com)
       const claudeUserContent: ClaudeContent[] = [];
       if (introMultiArquivo) claudeUserContent.push({ type: 'text', text: introMultiArquivo });
       for (const pdf of pdfsBase64) {
@@ -359,8 +397,6 @@ Deno.serve(async (req: Request) => {
           source: { type: 'base64', media_type: 'application/pdf', data: pdf.b64 },
         });
       }
-      // Pedido explícito no final pra ele só responder com JSON (sem
-      // explicações em texto) — Claude tende a adicionar prosa.
       claudeUserContent.push({
         type: 'text',
         text: 'Responda APENAS com o JSON do edital extraído, sem texto antes ou depois. Comece com `{` e termine com `}`.',
