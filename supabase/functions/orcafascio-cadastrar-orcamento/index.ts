@@ -383,7 +383,23 @@ Deno.serve(async (req: Request) => {
       if (u.startsWith('AGETOP RODOVIARIA')) return 'AGETOP RODOVIARIA';
       return u;
     }
+    // FILTRO DE BANCOS REALMENTE USADOS:
+    // Antes enviávamos TODOS os bancos do cabecalho.bases_utilizadas mesmo
+    // que nenhum item da licitação usasse aquele banco. Orçafascio ao
+    // configurar 8+ bancos junta tudo no renderer e dispara 500
+    // "Ocorreu um erro durante esse processo" ao abrir o budget
+    // (observado em SEGOV-SLZ, SEFIR Pavussu, etc — todos com 7+ bancos).
+    //
+    // Fix: cruzar com fontes que realmente aparecem em comps.fonte;
+    // bancos "fantasmas" (mencionados no cabecalho mas sem items) são
+    // descartados antes mesmo do filtro ORCAFASCIO_BANKS.
+    const fontesComItens = new Set(
+      (comps as Array<{ fonte: string | null }>)
+        .map((c) => normalizeBanco(c.fonte ?? ''))
+        .filter((f) => f && f !== 'PROPRIA'),
+    );
     const bancos = Array.from(new Set(basesUtilizadas.map(normalizeBanco)))
+      .filter((b) => fontesComItens.has(b))
       .filter((b) => b in ORCAFASCIO_BANKS)
       .map((nome) => {
         const meta = ORCAFASCIO_BANKS[nome];
