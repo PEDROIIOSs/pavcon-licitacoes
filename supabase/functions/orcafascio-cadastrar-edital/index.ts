@@ -315,15 +315,40 @@ Deno.serve(async (req: Request) => {
       COMPESA: { name: 'COMPESA', local: 'PE' },
       SIURB: { name: 'SIURB', local: 'SP' },
       MAPP: { name: 'MAPP', local: '' },         // fallback UF do edital
+      // Bancos adicionados em jun/2026 após aparecerem em editais reais:
+      GOINFRA: { name: 'GOINFRA', local: 'GO' },  // Goiás Infraestrutura
+      CPTM: { name: 'CPTM', local: 'SP' },        // Cia Paulista Trens Metropolitanos
+      SMOP: { name: 'SMOP', local: '' },          // Sec Mun Obras (UF varia, fallback)
+      DNIT: { name: 'DNIT', local: '' },          // Federal
+      CESAN: { name: 'CESAN', local: 'ES' },      // Cia Esp Santo Saneamento
+      SABESP: { name: 'SABESP', local: 'SP' },    // Cia Saneamento SP
+      CASAN: { name: 'CASAN', local: 'SC' },      // Cia Santa Catarina Saneamento
+      AGEHAB: { name: 'AGEHAB', local: '' },      // Agência Habitação (varia por estado)
+      TCE: { name: 'TCE', local: '' },            // Tribunal Contas Estado (varia)
     };
     const basesDaComposicao: Array<{
       name: string; local: string; version: string; status: boolean; with_labor_charges?: boolean;
     }> = [];
     for (const nome of basesEdital) {
-      const cfg = BANK_NORMALIZATION[nome];
-      if (!cfg) {
-        warnings.push(`Banco "${nome}" não mapeado em BANK_NORMALIZATION — pulando.`);
-        continue;
+      // FALLBACK INTELIGENTE: se o banco não está no BANK_NORMALIZATION,
+      // assume que é um banco regional/estadual e usa a UF do edital. Antes
+      // pulávamos (deixando itens sem base → R$ 0,00). Agora tentamos com
+      // best-guess; se Orçafascio rejeitar a base via addBases, o item ainda
+      // existe no orçamento (só sem referência de banco), e o warning fica
+      // visível pro orçamentista decidir manualmente.
+      // User feedback (jun/2026): "se aparecer banco novo, INCLUIR no cadastro
+      // não pular — preciso desse valor pra fechar o orçamento."
+      const cfg = BANK_NORMALIZATION[nome] ?? {
+        name: nome,
+        local: uf,  // UF do edital como melhor palpite
+      };
+      if (!BANK_NORMALIZATION[nome]) {
+        warnings.push(
+          `Banco "${nome}" não estava mapeado — usando configuração genérica ` +
+          `(nome="${nome}", UF="${uf || 'global'}"). Se Orçafascio não conhecer ` +
+          `esse banco, items vão entrar sem referência (PU pode ficar R$ 0). ` +
+          `Considere mapear manualmente.`,
+        );
       }
       // Resolve versão ESPECÍFICA do banco do cabecalho (data_base_descricao
       // pode ter datas diferentes pra cada banco). Fallbacks em ordem:
