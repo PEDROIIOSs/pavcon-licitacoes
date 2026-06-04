@@ -535,6 +535,17 @@ Deno.serve(async (req: Request) => {
     let composicoesPuladas = 0;
     let itensAdicionados = 0;
 
+    // Trackeia codes da composição PRÓPRIA que JÁ FORAM PROCESSADOS nesta
+    // execução do cadastro. Quando o edital tem o mesmo "COMPOSIÇÃO 04" em
+    // 5 ruas (SEFIR Pavussu), a 1ª iteração CRIA a composição com seus
+    // sub-itens; as 2ª–5ª chamam findCompositionByCode e REUSAM. O bug
+    // anterior tentava addItems mesmo na reusada → duplicação 5×.
+    //
+    // O fix v43 confiava em `created.items` retornado pela API mas
+    // find_by_code do Orçafascio NÃO popula esse array — sempre 0 → fix
+    // não disparava. Esta versão (v45) trackeia em memória, garantido.
+    const codesJaProcessadosNesseRun = new Set<string>();
+
     for (const comp of (composicoes as ComposicaoExtraida[])) {
       // Idempotência: se já tem orcafascio_composition_id, pula
       if (comp.orcafascio_composition_id) {
@@ -756,30 +767,36 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      // BUG CRÍTICO (SEFIR Pavussu, jun/2026): editais multi-rua repetem o
-      // MESMO código de composição PRÓPRIA (ex: "COMPOSIÇÃO 04" pra
-      // pavimentação em paralelepípedo aparece em 5 ruas). O laço processa
-      // os 5 — primeira itera CRIA a composição com N sub-items; iterações
-      // 2-5 fazem findCompositionByCode e REUSAM a mesma composição.
-      // Antes a lógica era "SEMPRE addItems" porque Orçafascio rejeitaria
-      // duplicados com 422 already_in_use. NA PRÁTICA isso é falso em
-      // batch mode — a API aceita e duplica os sub-items. Resultado:
-      // PU da composição inflado 5× → orçamento total 2× o real.
+      // FIX DEFINITIVO (v45) — SEFIR Pavussu multi-rua:
+      // Edital tem "COMPOSIÇÃO 04" repetido em 5 ruas (item_codigo
+      // 2.2.1, 3.2.1, 4.2.1, 5.2.1, 6.2.1). O laço processa os 5:
+      //   - Iter 1: cria composição com 7 sub-items
+      //   - Iter 2-5: findCompositionByCode reusa, mas SE não trackar,
+      //     addItems duplica os 7 sub-items mais 4 vezes = 35 totais
+      //   - PU inflado 5× → orçamento ~2× o real
       //
-      // FIX: só adiciona items se composição foi CRIADA AGORA ou está
-      // VAZIA (itensJaExistentes === 0). Em retries de cadastros parciais
-      // a composição que estava vazia continua sendo preenchida; em
-      // composições reusadas (mesmo código já apareceu antes nesta licitação)
-      // a 2ª iteração não duplica.
-      const composicaoJaPopulada = !foiCriadaAgora && itensJaExistentes > 0;
-      if (items.length > 0 && composicaoJaPopulada) {
-        // Reusada e já tem sub-items: pula o addItems pra evitar
-        // duplicação. Conta como sucesso silencioso (composição já está OK).
+      // v43 tentou checar `created.items.length` mas a API find_by_code
+      // não popula esse array (sempre 0). Não disparava.
+      //
+      // v45: track em memória os codes já processados neste run.
+      // Quando o mesmo code aparece de novo, pula addItems garantido.
+      const jaProcessadoNesseRun = codesJaProcessadosNesseRun.has(codigo);
+      if (items.length > 0 && jaProcessadoNesseRun) {
+        // Mesmo code já recebeu sub-items nesta rodada → pula pra evitar
+        // duplicação. Conta como sucesso (composição já está OK).
         itensAdicionados += items.length;
+      } else if (items.length > 0 && !foiCriadaAgora && itensJaExistentes > 0) {
+        // Existe no MyBase com sub-items (de outra licitação ou rodada
+        // anterior), e a API conseguiu enumerar items → não duplica.
+        itensAdicionados += items.length;
+        codesJaProcessadosNesseRun.add(codigo);
       } else if (items.length > 0) {
         try {
           await addItemsToComposition(ctx, created.id, items);
           itensAdicionados += items.length;
+          // Marca code como processado — próxima iteração do mesmo code
+          // pula addItems pra não duplicar sub-itens.
+          codesJaProcessadosNesseRun.add(codigo);
         } catch (err) {
           // Batch falhou com 500 (HTML genérico, sem detalhes do item ruim).
           // Tenta item por item pra identificar o(s) problemático(s) — os
