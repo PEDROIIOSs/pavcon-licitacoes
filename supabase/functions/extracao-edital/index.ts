@@ -285,6 +285,30 @@ Deno.serve(async (req: Request) => {
       return errorResponse(500, 'Falha ao transicionar para extraindo.', stT1.message);
     }
 
+    // ---- 3.5) AUTO-CLEANUP: limpa composicoes_extraidas antigas -------------
+    // PADRÃO DETECTADO (jun/2026, SEFIR 02): quando o orçamentista reextrai
+    // uma licitação, as composicoes_extraidas antigas continuam com
+    // orcafascio_composition_id setado. O cadastro_edital vê esses IDs como
+    // "idempotente" e PULA as composições — orçamento final fica parcial
+    // ("Já cadastradas: 16, Itens criados: 15" → total errado).
+    //
+    // Fix: toda extração nova é tabula rasa. Apaga composicoes_extraidas +
+    // composicao_propria_itens da licitação. O agente "aprende" desse padrão
+    // sem precisar do orçamentista lembrar de resetar manualmente.
+    //
+    // Composicao_propria_itens cai por cascata (FK ON DELETE CASCADE).
+    const { error: cleanupErr } = await admin
+      .from('composicoes_extraidas')
+      .delete()
+      .eq('licitacao_id', licitacaoId);
+    if (cleanupErr) {
+      console.error(
+        `[extracao-edital] auto-cleanup falhou (não fatal): ${cleanupErr.message}`,
+      );
+      // Não aborta — cadastro pode acontecer com dados misturados, mas o
+      // user pode ver e corrigir manualmente.
+    }
+
     // arquivo_id principal: o primeiro de tipo planilha_orcamentaria,
     // ou o primeiro arquivo em geral
     const arquivoPrincipal =
