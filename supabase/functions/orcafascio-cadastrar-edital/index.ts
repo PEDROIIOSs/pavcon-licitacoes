@@ -340,12 +340,12 @@ Deno.serve(async (req: Request) => {
       // não pular — preciso desse valor pra fechar o orçamento."
       const cfg = BANK_NORMALIZATION[nome] ?? {
         name: nome,
-        local: uf,  // UF do edital como melhor palpite
+        local: ufEdital,  // UF do edital como melhor palpite (uf real é declarado mais abaixo via pickUF)
       };
       if (!BANK_NORMALIZATION[nome]) {
         warnings.push(
           `Banco "${nome}" não estava mapeado — usando configuração genérica ` +
-          `(nome="${nome}", UF="${uf || 'global'}"). Se Orçafascio não conhecer ` +
+          `(nome="${nome}", UF="${ufEdital || 'global'}"). Se Orçafascio não conhecer ` +
           `esse banco, items vão entrar sem referência (PU pode ficar R$ 0). ` +
           `Considere mapear manualmente.`,
         );
