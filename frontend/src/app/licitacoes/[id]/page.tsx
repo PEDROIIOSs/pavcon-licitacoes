@@ -237,7 +237,18 @@ export default async function LicitacaoDetailPage({
         <ProposalCard
           licitacaoId={licitacao.id}
           status={licitacao.status}
-          bdiEdital={Number(licitacao.bdi_referencia_edital ?? 22)}
+          /*
+           * BDI: prioriza o campo bdi_referencia_edital (preenchido manualmente).
+           * Senão, calcula a partir do total_com_bdi / total_sem_bdi extraído
+           * (mesmo cálculo da seção "Total do orçamento" acima). Antes caía
+           * num fallback hardcoded 22%, que dava divergência visível pro
+           * orçamentista (ex.: edital com BDI real 28,35% mostrava 22% no
+           * painel de Proposta Readequada — confusão sobre qual BDI vale).
+           */
+          bdiEdital={Number(
+            licitacao.bdi_referencia_edital ??
+              (totalSemBdi > 0 ? (totalBdi / totalSemBdi) * 100 : 22),
+          )}
           totalEdital={totalComBdi}
           orcamentoBaseId={licitacao.orcafascio_orcamento_base_id ?? null}
           proposta={{
