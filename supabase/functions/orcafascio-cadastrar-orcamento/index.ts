@@ -563,18 +563,37 @@ Deno.serve(async (req: Request) => {
         .filter((c) => c.tipo_linha === 'servico')
         .reduce((s, c) => s + (Number(c.preco_total) || 0), 0);
       if (totalExtraido > 0) {
-        try {
-          // Pequeno delay pra Orçafascio terminar de processar o batch
-          // (race entre add-items e ajustarValor já vista na proposta).
-          await new Promise((r) => setTimeout(r, 2000));
-          await ajustarValor(ctx, budget_id, totalExtraido);
+        // PADRÃO APRENDIDO (SEFIR 02, jun/2026): a primeira chamada
+        // ajustarValor logo após addItemsBatch retorna 200 OK mas é no-op
+        // — o budget ainda está "finalizando" no servidor do Orçafascio.
+        // Segunda chamada com mais delay funciona.
+        //
+        // Fix: até 3 tentativas com delay progressivo (10s, 15s, 20s).
+        // Não verificamos o total entre tentativas (precisaria de helper
+        // que ainda não temos), mas log explicitamente cada tentativa.
+        const delays = [2000, 10000, 15000]; // ms entre tentativas
+        let ajusteAplicadoTentativa = 0;
+        let ultimoErro: string | null = null;
+        for (let i = 0; i < delays.length; i++) {
+          try {
+            await new Promise((r) => setTimeout(r, delays[i]));
+            await ajustarValor(ctx, budget_id, totalExtraido);
+            ajusteAplicadoTentativa = i + 1;
+            // Se a 1ª chamada já passou sem exception, ainda assim chamamos
+            // de novo na próxima iteração — é cintura curta porque a 1ª
+            // costuma ser no-op. Sai do loop só depois da 2ª.
+            if (i >= 1) break;
+          } catch (e) {
+            ultimoErro = e instanceof Error ? e.message : String(e);
+          }
+        }
+        if (ajusteAplicadoTentativa > 0) {
           warnings.push(
-            `✓ Auto-ajuste do total: orçamento forçado pra R$ ${totalExtraido.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (= valor extraído do edital, regra de licitação).`,
+            `✓ Auto-ajuste do total: orçamento forçado pra R$ ${totalExtraido.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (${ajusteAplicadoTentativa} chamada(s) ajustarValor, regra de licitação). Confira o total no Orçafascio — se ainda divergir, use "Forçar total" no OrçaPav AI.`,
           );
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
+        } else {
           warnings.push(
-            `⚠ Auto-ajuste do total FALHOU (${msg.slice(0, 150)}). Orçamento pode ter valor divergente do edital — use "Forçar total" no painel OrçaPav AI manualmente.`,
+            `⚠ Auto-ajuste do total FALHOU em todas as tentativas (último erro: ${(ultimoErro ?? 'desconhecido').slice(0, 120)}). Use "Forçar total" no painel OrçaPav AI manualmente.`,
           );
         }
       }
