@@ -43,6 +43,7 @@ import {
 } from '../_shared/orcafascio-web.ts';
 import {
   addItemsBatch,
+  ajustarValor,
   type BudgetItem,
   createBudget,
   createContext,
@@ -58,6 +59,11 @@ interface RequestBody {
   licitacao_id?: string;
   credential_id?: string;
   trace_id?: string;
+  /** Se true, pula a auto-correção do total (ajustarValor → totalExtraido).
+   * Default false — sempre força match com edital. Override útil pra
+   * debug ou pra quando o orçamentista quer ver o orçamento "cru" do
+   * Orçafascio antes de ajustar manualmente. */
+  pular_forcar_total_edital?: boolean;
   /** Cria uma 2ª versão como PROPOSTA. BDI permanece igual ao edital
    * (regra de licitação: desconto não incide sobre BDI). Pra aplicar o
    * desconto, futuras iterações vão enviar pu_override por item — esta
@@ -283,7 +289,7 @@ Deno.serve(async (req: Request) => {
     const { data: comps, error: compErr } = await admin
       .from('composicoes_extraidas')
       .select(
-        'id, item_codigo, item_nivel, item_pai_codigo, tipo_linha, codigo, fonte, descricao, quantidade, orcafascio_composition_id, ordem',
+        'id, item_codigo, item_nivel, item_pai_codigo, tipo_linha, codigo, fonte, descricao, quantidade, preco_total, orcafascio_composition_id, ordem',
       )
       .eq('licitacao_id', licitacaoId)
       .order('ordem', { ascending: true });
@@ -534,6 +540,43 @@ Deno.serve(async (req: Request) => {
       const CHUNK = 300;
       for (let i = 0; i < items.length; i += CHUNK) {
         await addItemsBatch(ctx, budget_id, items.slice(i, i + CHUNK));
+      }
+    }
+
+    // ---- 8.4) AUTO-CORREÇÃO DO TOTAL (consciência do agente) ---------------
+    // CONTEXTO: o orçamento da Pavcon TEM que casar com o valor do orçamento
+    // do órgão. Divergências comuns (PUs do SINAPI da versão atual diferentes
+    // do edital, codes que zeram silenciosamente, BDI/leis sociais aplicados
+    // de forma sutilmente diferente, etc) causam variações de 5-30% no total.
+    //
+    // Pra resolver isso automaticamente, no FINAL do cadastro chamamos
+    // ajustarValor(budgetId, totalExtraido) que aplica um fator linear em
+    // TODOS os items pra o total bater exato com o que veio do edital.
+    //
+    // Trade-off: o ajuste é LINEAR (mesmo % pra todos), então a distribuição
+    // interna entre items pode ficar imperfeita. Mas o TOTAL bate — que é
+    // o que o órgão avalia no julgamento da proposta.
+    //
+    // Opt-out: body.pular_forcar_total_edital=true.
+    if (!isProposta && !body.pular_forcar_total_edital) {
+      const totalExtraido = (comps ?? [])
+        .filter((c) => c.tipo_linha === 'servico')
+        .reduce((s, c) => s + (Number(c.preco_total) || 0), 0);
+      if (totalExtraido > 0) {
+        try {
+          // Pequeno delay pra Orçafascio terminar de processar o batch
+          // (race entre add-items e ajustarValor já vista na proposta).
+          await new Promise((r) => setTimeout(r, 2000));
+          await ajustarValor(ctx, budget_id, totalExtraido);
+          warnings.push(
+            `✓ Auto-ajuste do total: orçamento forçado pra R$ ${totalExtraido.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (= valor extraído do edital, regra de licitação).`,
+          );
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          warnings.push(
+            `⚠ Auto-ajuste do total FALHOU (${msg.slice(0, 150)}). Orçamento pode ter valor divergente do edital — use "Forçar total" no painel OrçaPav AI manualmente.`,
+          );
+        }
       }
     }
 
