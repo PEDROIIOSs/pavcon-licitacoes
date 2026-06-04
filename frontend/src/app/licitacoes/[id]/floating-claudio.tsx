@@ -248,40 +248,111 @@ export function FloatingClaudio({ licitacaoId }: Props) {
     });
   }
 
-  // AUTO-CORREÇÃO TOTAL — dispara o agente Claude com tool use em loop
-  // pra resolver TUDO que ele consegue sem perguntar. Quando termina, mostra
-  // o relatório do que foi feito + o que ficou pendente (no chat) + recarrega
-  // os diagnósticos pra refletir as mudanças.
+  // AUTO-CORREÇÃO TOTAL — pipeline em 2 fases:
+  //   FASE 1: dispara o agente IA (Claude com tool use, ou Gemini Flash de fallback)
+  //           pra resolver o que precisa de inteligência (mapeamento de codes
+  //           descontinuados, reclassificação de adaptados).
+  //   FASE 2: itera nos diagnósticos REMANESCENTES e aplica auto-fixes
+  //           DETERMINÍSTICOS (forçar total, reclassificar, etc) sem mais
+  //           perguntar — o usuário já confirmou no início.
+  //
+  // Esse loop existe porque o agente IA da fase 1 só conhece tools de
+  // mapeamento; as ações determinísticas (forçar valor, reclassificar)
+  // precisam ser disparadas explicitamente. Antes o orçamentista tinha
+  // que clicar botão por botão depois da IA — agora um clique só faz tudo.
   function handleAutoCorrigirTudo() {
     if (!confirm(
-      'OrçaPav AI vai analisar TODOS os erros desta licitação e tentar corrigir automaticamente. ' +
+      'OrçaPav AI vai analisar TODOS os erros desta licitação e aplicar TODAS as correções ' +
+      'automáticas disponíveis (mapeamentos + reclassificação + forçar total). ' +
       'Pode levar 30-60 segundos. Continuar?'
     )) return;
     setErro(null);
     setSucesso(null);
-    setAba('chat'); // muda pra aba chat pra mostrar resposta do agente
+    setAba('chat');
     setChatPensando(true);
     setHistorico((prev) => [
       ...prev,
-      { role: 'user', content: '🤖 Auto-corrigir tudo (modo IA autônomo)', timestamp: new Date().toISOString() },
+      { role: 'user', content: '🤖 Auto-corrigir TUDO (modo turbo: IA + ações determinísticas)', timestamp: new Date().toISOString() },
     ]);
     startTransition(async () => {
+      const relatorio: string[] = [];
+      let totalAcoes = 0;
       try {
+        // ============= FASE 1: agente IA (mapeamento + reclassificação) =============
         const r = await autoCorrigirComIA(licitacaoId);
         if (r.error) {
-          setErro(r.error);
+          relatorio.push(`⚠ Fase IA falhou: ${r.error}`);
         } else if (r.resposta) {
-          const respostaFmt = r.acoes_executadas && r.acoes_executadas.length > 0
-            ? `${r.resposta}\n\n_(executei ${r.acoes_executadas.length} ação(ões) automaticamente)_`
-            : r.resposta;
-          setHistorico((prev) => [
-            ...prev,
-            { role: 'assistant', content: respostaFmt, timestamp: new Date().toISOString() },
-          ]);
-          // Recarrega diagnósticos pra refletir as correções aplicadas
-          const ar = await analisarLicitacao(licitacaoId);
-          if (ar.diagnosticos) setDiagnosticos(ar.diagnosticos as Diagnostico[]);
+          relatorio.push(`**Fase 1 (IA):**\n${r.resposta}`);
+          if (r.acoes_executadas) totalAcoes += r.acoes_executadas.length;
         }
+
+        // Recarrega diagnósticos pra ver o que sobrou depois da fase 1
+        let diagsRestantes: Diagnostico[] = [];
+        try {
+          const ar = await analisarLicitacao(licitacaoId);
+          if (ar.diagnosticos) {
+            diagsRestantes = ar.diagnosticos as Diagnostico[];
+            setDiagnosticos(diagsRestantes);
+          }
+        } catch {}
+
+        // ============= FASE 2: ações determinísticas sem confirmação =============
+        // tipos auto-aplicáveis (sem precisar de input do usuário):
+        //   - forcar_total_inline   → forcarTotalOrcamentoBase(valor_alvo)
+        //   - codes_adaptados_nao_reclassificados → executarAutoFix(tipo)
+        //   - aplicar_mapeamentos_pendentes       → executarAutoFix(tipo)
+        // Skip: mapping_inline / definir_data_base_inline (precisam input)
+        const fase2: string[] = [];
+        for (const d of diagsRestantes) {
+          const tipoAcao = d.acao_acionavel?.tipo;
+          try {
+            if (tipoAcao === 'forcar_total_inline') {
+              const valorAlvo = Number(d.acao_acionavel?.params?.valor_alvo);
+              if (Number.isFinite(valorAlvo) && valorAlvo > 0) {
+                const rr = await forcarTotalOrcamentoBase(licitacaoId, valorAlvo);
+                if (rr.error) {
+                  fase2.push(`✗ Forçar total falhou: ${rr.error}`);
+                } else {
+                  fase2.push(`✓ Total forçado pra R$ ${valorAlvo.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`);
+                  totalAcoes++;
+                }
+              }
+            } else if (AUTO_FIX_DISPONIVEL[d.tipo]) {
+              const rr = await executarAutoFix(licitacaoId, d.tipo);
+              if (rr.error) {
+                fase2.push(`✗ ${d.tipo}: ${rr.error}`);
+              } else {
+                fase2.push(`✓ ${d.tipo}: ${rr.mensagem ?? `${rr.mudancas ?? 0} mudança(s)`}`);
+                totalAcoes++;
+              }
+            }
+            // Outros tipos (mapping_inline, definir_data_base_inline,
+            // composicoes_vazias sem ação) ficam pendentes pro usuário.
+          } catch (e) {
+            fase2.push(`✗ ${d.tipo}: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
+        if (fase2.length > 0) {
+          relatorio.push(`**Fase 2 (ações determinísticas):**\n${fase2.join('\n')}`);
+        }
+
+        // Recarrega diagnósticos final pra refletir tudo que mudou
+        try {
+          const ar2 = await analisarLicitacao(licitacaoId);
+          if (ar2.diagnosticos) setDiagnosticos(ar2.diagnosticos as Diagnostico[]);
+        } catch {}
+
+        const respostaFinal = relatorio.length > 0
+          ? `${relatorio.join('\n\n')}\n\n_Total: ${totalAcoes} ação(ões) executada(s) automaticamente._`
+          : `Nenhuma correção aplicável encontrada (${totalAcoes} ações tentadas).`;
+
+        setHistorico((prev) => [
+          ...prev,
+          { role: 'assistant', content: respostaFinal, timestamp: new Date().toISOString() },
+        ]);
+      } catch (e) {
+        setErro(e instanceof Error ? e.message : String(e));
       } finally {
         setChatPensando(false);
       }
@@ -560,9 +631,9 @@ export function FloatingClaudio({ licitacaoId }: Props) {
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div>
-                      <p className="text-sm font-bold">🤖 IA corrige tudo automaticamente</p>
+                      <p className="text-sm font-bold">🤖 IA corrige TUDO automaticamente</p>
                       <p className="mt-0.5 text-[11px] text-white/80">
-                        OrçaPav AI analisa, aplica fixes em loop e te entrega o resultado pronto
+                        Mapeamento + reclassificação + forçar total + outros auto-fixes — em sequência, sem perguntar
                       </p>
                     </div>
                     <span className="text-2xl">→</span>
