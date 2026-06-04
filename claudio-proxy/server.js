@@ -159,7 +159,7 @@ function limparJobsAntigos() {
 setInterval(limparJobsAntigos, 5 * 60 * 1000); // a cada 5 min
 
 app.post('/extract', async (req, res) => {
-  const { system, user_intro, pdfs, trailing_instruction } = req.body || {};
+  const { system, user_intro, pdfs, trailing_instruction, callback_url, callback_token } = req.body || {};
   if (!Array.isArray(pdfs) || pdfs.length === 0) {
     return res.status(400).json({ error: 'pdfs obrigatório (array não vazio com {filename, b64}).' });
   }
@@ -168,7 +168,7 @@ app.post('/extract', async (req, res) => {
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const startedAt = Date.now();
-  jobs.set(jobId, { status: 'running', started_at: startedAt });
+  jobs.set(jobId, { status: 'running', started_at: startedAt, callback_url, callback_token });
 
   // Responde IMEDIATAMENTE com o job_id pra evitar timeout do tunnel
   res.json({ ok: true, job_id: jobId, status: 'queued' });
@@ -217,6 +217,7 @@ app.post('/extract', async (req, res) => {
         job.text = result.stdout.trim();
         job.duration_ms = duration;
         job.finished_at = Date.now();
+        await notifyCallback(jobId, job);
       }
     } catch (e) {
       console.error(`[claudio-proxy] job=${jobId} erro:`, e);
@@ -225,12 +226,39 @@ app.post('/extract', async (req, res) => {
         job.status = 'error';
         job.error = e instanceof Error ? e.message : String(e);
         job.finished_at = Date.now();
+        await notifyCallback(jobId, job);
       }
     } finally {
       if (tmp) try { await rm(tmp, { recursive: true, force: true }); } catch {}
     }
   })();
 });
+
+// =============================================================================
+// Notifica callback_url quando job termina (substitui polling)
+// =============================================================================
+async function notifyCallback(jobId, job) {
+  if (!job.callback_url) return;
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (job.callback_token) headers['Authorization'] = `Bearer ${job.callback_token}`;
+    const body = {
+      job_id: jobId,
+      status: job.status,
+      text: job.text,
+      error: job.error,
+      duration_ms: job.duration_ms,
+    };
+    const resp = await fetch(job.callback_url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+    console.log(`[claudio-proxy] job=${jobId} callback ${job.callback_url.slice(0, 60)} → ${resp.status}`);
+  } catch (e) {
+    console.error(`[claudio-proxy] job=${jobId} callback falhou:`, e);
+  }
+}
 
 // =============================================================================
 // GET /extract/:job_id — polling pra cliente saber o status
