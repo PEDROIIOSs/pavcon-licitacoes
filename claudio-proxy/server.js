@@ -131,87 +131,128 @@ app.post('/chat', async (req, res) => {
 });
 
 // =============================================================================
-// POST /extract — Extrai dados estruturados de PDFs via Claude Code
+// POST /extract — modo ASYNC (necessário pra contornar timeout 100s do tunnel)
 // =============================================================================
-// Body:
-//   {
-//     "system": "system prompt (mesmo do extracao-edital)",
-//     "user_intro": "texto introdutório opcional",
-//     "pdfs": [{ filename: "ANEXO.pdf", b64: "JVBERi0xL..." }, ...],
-//     "trailing_instruction": "Responda APENAS com JSON..."
-//   }
+// Body: { system, user_intro, pdfs: [{filename, b64}], trailing_instruction }
+// Response (200, IMEDIATAMENTE):
+//   { ok: true, job_id: "uuid", status: "queued" }
 //
-// Estratégia: escreve os PDFs num diretório temporário, monta um prompt
-// que referencia os arquivos por path, invoca `claude -p` com cwd
-// apontando pra esse diretório. O Claude Code usa a tool Read pra ler
-// cada PDF (suporta PDFs nativamente desde out/2024) e produz a resposta.
+// Cliente DEVE fazer polling em GET /extract/:job_id até receber
+// status: "done" ou "error". Job permanece em memória por 30 min após
+// concluir (limpeza preguiçosa). Em caso de restart do proxy, todos os
+// jobs perdem o estado — cliente recebe 404 e deve recomeçar.
 //
-// Não usamos --output-format json porque queremos o texto bruto da
-// resposta (que vai ser JSON do edital). O parser do Edge Function já
-// trata fences markdown, jsonrepair, etc.
+// Por que async: Cloudflare Quick Tunnel mata HTTP requests em 100s.
+// Claude CLI lê PDFs em 3-8 min. Mantendo a conexão aberta dispara 524.
 // =============================================================================
+const jobs = new Map(); // job_id -> { status, text?, error?, started_at, finished_at?, tmp? }
+const JOB_TTL_MS = 30 * 60 * 1000; // 30 min
+
+function limparJobsAntigos() {
+  const agora = Date.now();
+  for (const [id, job] of jobs.entries()) {
+    if (job.finished_at && agora - job.finished_at > JOB_TTL_MS) {
+      jobs.delete(id);
+    }
+  }
+}
+setInterval(limparJobsAntigos, 5 * 60 * 1000); // a cada 5 min
+
 app.post('/extract', async (req, res) => {
   const { system, user_intro, pdfs, trailing_instruction } = req.body || {};
   if (!Array.isArray(pdfs) || pdfs.length === 0) {
     return res.status(400).json({ error: 'pdfs obrigatório (array não vazio com {filename, b64}).' });
   }
 
+  const jobId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const startedAt = Date.now();
-  const tmp = await mkdtemp(join(tmpdir(), 'claudio-extract-'));
-  console.log(`[claudio-proxy] /extract: ${pdfs.length} PDF(s) em ${tmp}`);
+  jobs.set(jobId, { status: 'running', started_at: startedAt });
 
-  try {
-    // 1) Escreve cada PDF em arquivo temporário
-    const writtenFiles = [];
-    for (let i = 0; i < pdfs.length; i++) {
-      const safeFilename = (pdfs[i].filename ?? `arquivo_${i + 1}.pdf`)
-        .replace(/[^\w.-]/g, '_')
-        .slice(0, 80);
-      const fpath = join(tmp, safeFilename);
-      const buf = Buffer.from(pdfs[i].b64, 'base64');
-      await writeFile(fpath, buf);
-      writtenFiles.push(safeFilename);
+  // Responde IMEDIATAMENTE com o job_id pra evitar timeout do tunnel
+  res.json({ ok: true, job_id: jobId, status: 'queued' });
+
+  // Executa em background — não tem mais request pra timeoutar
+  (async () => {
+    let tmp;
+    try {
+      tmp = await mkdtemp(join(tmpdir(), 'claudio-extract-'));
+      jobs.get(jobId).tmp = tmp;
+      console.log(`[claudio-proxy] /extract job=${jobId}: ${pdfs.length} PDF(s) em ${tmp}`);
+
+      const writtenFiles = [];
+      for (let i = 0; i < pdfs.length; i++) {
+        const safeFilename = (pdfs[i].filename ?? `arquivo_${i + 1}.pdf`)
+          .replace(/[^\w.-]/g, '_')
+          .slice(0, 80);
+        const fpath = join(tmp, safeFilename);
+        const buf = Buffer.from(pdfs[i].b64, 'base64');
+        await writeFile(fpath, buf);
+        writtenFiles.push(safeFilename);
+      }
+
+      const partes = [];
+      if (user_intro) partes.push(user_intro);
+      partes.push(
+        `Os seguintes PDFs estão disponíveis no diretório atual. ` +
+        `Use a tool Read pra ler CADA UM antes de produzir o JSON:`,
+      );
+      partes.push(writtenFiles.map((f, i) => `  ${i + 1}. ${f}`).join('\n'));
+      if (trailing_instruction) partes.push(trailing_instruction);
+      const promptCompleto = partes.join('\n\n');
+
+      const args = ['--print', '--output-format', 'text'];
+      if (system) args.push('--append-system-prompt', system);
+
+      const result = await executarClaude(args, promptCompleto, {
+        cwd: tmp,
+        timeoutMs: EXTRACT_TIMEOUT_MS,
+      });
+      const duration = Date.now() - startedAt;
+      console.log(`[claudio-proxy] job=${jobId} OK em ${(duration / 1000).toFixed(1)}s (${result.stdout.length} chars)`);
+      const job = jobs.get(jobId);
+      if (job) {
+        job.status = 'done';
+        job.text = result.stdout.trim();
+        job.duration_ms = duration;
+        job.finished_at = Date.now();
+      }
+    } catch (e) {
+      console.error(`[claudio-proxy] job=${jobId} erro:`, e);
+      const job = jobs.get(jobId);
+      if (job) {
+        job.status = 'error';
+        job.error = e instanceof Error ? e.message : String(e);
+        job.finished_at = Date.now();
+      }
+    } finally {
+      if (tmp) try { await rm(tmp, { recursive: true, force: true }); } catch {}
     }
+  })();
+});
 
-    // 2) Monta prompt: pede pro Claude ler cada arquivo e responder com JSON.
-    // Mantém system separado via --append-system-prompt.
-    const partes = [];
-    if (user_intro) partes.push(user_intro);
-    partes.push(
-      `Os seguintes PDFs estão disponíveis no diretório atual. ` +
-      `Use a tool Read pra ler CADA UM antes de produzir o JSON:`,
-    );
-    partes.push(writtenFiles.map((f, i) => `  ${i + 1}. ${f}`).join('\n'));
-    if (trailing_instruction) partes.push(trailing_instruction);
-    const promptCompleto = partes.join('\n\n');
-
-    // 3) Invoca o CLI com cwd no diretório dos PDFs
-    const args = ['--print', '--output-format', 'text'];
-    if (system) args.push('--append-system-prompt', system);
-
-    const result = await executarClaude(args, promptCompleto, {
-      cwd: tmp,
-      timeoutMs: EXTRACT_TIMEOUT_MS,
-    });
-    const duration = Date.now() - startedAt;
-    console.log(`[claudio-proxy] /extract resposta em ${(duration / 1000).toFixed(1)}s (${result.stdout.length} chars)`);
-    res.json({
-      ok: true,
-      text: result.stdout.trim(),
-      via: 'claude-code-cli',
-      duration_ms: duration,
-      pdfs_lidos: writtenFiles.length,
-    });
-  } catch (e) {
-    console.error('[claudio-proxy] /extract erro:', e);
-    res.status(500).json({
-      error: e instanceof Error ? e.message : String(e),
-      duration_ms: Date.now() - startedAt,
-    });
-  } finally {
-    // 4) Limpa temp dir (best-effort)
-    try { await rm(tmp, { recursive: true, force: true }); } catch {}
+// =============================================================================
+// GET /extract/:job_id — polling pra cliente saber o status
+// =============================================================================
+// Response:
+//   200 { ok, status: "queued|running|done|error", text?, error?, duration_ms? }
+//   404 { error: "job não encontrado (expirou ou nunca existiu)" }
+// =============================================================================
+app.get('/extract/:job_id', (req, res) => {
+  const job = jobs.get(req.params.job_id);
+  if (!job) {
+    return res.status(404).json({ error: 'job não encontrado (expirou ou nunca existiu).' });
   }
+  res.json({
+    ok: true,
+    status: job.status,
+    text: job.text,
+    error: job.error,
+    duration_ms: job.duration_ms,
+    started_at: new Date(job.started_at).toISOString(),
+    finished_at: job.finished_at ? new Date(job.finished_at).toISOString() : null,
+  });
 });
 
 // =============================================================================

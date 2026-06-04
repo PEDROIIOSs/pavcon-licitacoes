@@ -361,30 +361,61 @@ Deno.serve(async (req: Request) => {
     let resultUsage = { promptTokenCount: 0, candidatesTokenCount: 0 };
     let resultCustoUsd = 0;
     if (providerEscolhido === 'anthropic' && claudioProxyUrl) {
-      // Caminho A: proxy local (Claude Code CLI com sub Max). Sem custo
-      // direto por extração (usa a cota da subscription).
-      const proxyBody = {
-        system: SYSTEM_PROMPT,
-        user_intro: introMultiArquivo,
-        pdfs: pdfsBase64.map((p) => ({ filename: p.filename, b64: p.b64 })),
-        trailing_instruction:
-          'Responda APENAS com o JSON do edital extraído, sem texto antes ou depois. Comece com `{` e termine com `}`.',
-      };
+      // Caminho A: proxy local (Claude Code CLI com sub Max). Usa fluxo
+      // ASSÍNCRONO porque Cloudflare Quick Tunnel mata HTTP requests em 100s
+      // e Claude CLI extrai em 3-8 min. Proxy responde com job_id na hora,
+      // a gente faz polling pra esperar terminar.
+      const proxyBase = claudioProxyUrl.replace(/\/$/, '');
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (claudioProxyToken) headers['Authorization'] = `Bearer ${claudioProxyToken}`;
-      const proxyResp = await fetch(`${claudioProxyUrl.replace(/\/$/, '')}/extract`, {
+
+      const startResp = await fetch(`${proxyBase}/extract`, {
         method: 'POST',
         headers,
-        body: JSON.stringify(proxyBody),
+        body: JSON.stringify({
+          system: SYSTEM_PROMPT,
+          user_intro: introMultiArquivo,
+          pdfs: pdfsBase64.map((p) => ({ filename: p.filename, b64: p.b64 })),
+          trailing_instruction:
+            'Responda APENAS com o JSON do edital extraído, sem texto antes ou depois. Comece com `{` e termine com `}`.',
+        }),
       });
-      const proxyJson = await proxyResp.json().catch(() => ({}));
-      if (!proxyResp.ok || !proxyJson.ok) {
+      const startJson = await startResp.json().catch(() => ({}));
+      if (!startResp.ok || !startJson.job_id) {
         throw new Error(
-          `Cláudio proxy /extract falhou (${proxyResp.status}): ${proxyJson.error ?? proxyJson.text?.slice(0, 200) ?? 'sem detalhes'}`,
+          `Cláudio proxy /extract POST falhou (${startResp.status}): ${startJson.error ?? 'sem job_id'}`,
         );
       }
-      resultText = proxyJson.text ?? null;
-      // Sem tokens/custo via proxy (CLI não expõe usage)
+      const jobId = startJson.job_id;
+      console.log(`[extracao-edital] proxy job=${jobId} iniciado, polling…`);
+
+      // Polling: até 12 min (720s) total, com backoff curto
+      const MAX_POLL_MS = 720_000;
+      const POLL_INTERVAL_MS = 5000;
+      const pollStarted = Date.now();
+      let proxyText: string | null = null;
+      while (Date.now() - pollStarted < MAX_POLL_MS) {
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+        const pollResp = await fetch(`${proxyBase}/extract/${jobId}`, { headers });
+        if (!pollResp.ok) {
+          // 404 = job expirou; outros 5xx = tunnel/proxy off
+          throw new Error(`Cláudio proxy poll falhou (${pollResp.status})`);
+        }
+        const pollJson = await pollResp.json();
+        if (pollJson.status === 'done') {
+          proxyText = pollJson.text ?? '';
+          console.log(`[extracao-edital] proxy job=${jobId} done em ${pollJson.duration_ms}ms`);
+          break;
+        }
+        if (pollJson.status === 'error') {
+          throw new Error(`Cláudio CLI falhou: ${pollJson.error}`);
+        }
+        // status: 'queued' ou 'running' → continua polling
+      }
+      if (proxyText === null) {
+        throw new Error(`Cláudio proxy: timeout aguardando job (>${MAX_POLL_MS / 1000}s).`);
+      }
+      resultText = proxyText;
       resultUsage = { promptTokenCount: 0, candidatesTokenCount: 0 };
       resultCustoUsd = 0;
     } else if (providerEscolhido === 'anthropic') {
