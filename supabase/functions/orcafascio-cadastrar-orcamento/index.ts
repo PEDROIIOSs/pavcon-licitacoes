@@ -539,8 +539,36 @@ Deno.serve(async (req: Request) => {
             : `COMPOSIC_${sanitize(c.item_codigo as string)}`
         );
         const mybaseCode = `${licShort}_${codigoBase}`.slice(0, 50);
-        const code = isPropria ? mybaseCode : (c.codigo ?? '');
-        if (!code) continue;
+        // NORMALIZAÇÃO DE CÓDIGOS (SEINFRA cooper, jun/2026):
+        // Codes extraídos do PDF às vezes têm formatação atípica que faz
+        // Orçafascio não encontrar no catálogo → item entra com R$ 0,00.
+        // Exemplos vistos:
+        //   - SINAPI "00040647" (leading zeros) → catálogo tem "40647"
+        //   - ORSE "S98525S" (letras prefixo/sufixo) → catálogo tem "98525"
+        // Aplicamos só pra bancos referenciais; PROPRIA mantém code original
+        // (já vai prefixado com licShort_).
+        function normalizarCodeBanco(rawCode: string, fonte: string | null): string {
+          const f = (fonte ?? '').toUpperCase();
+          const trimmed = String(rawCode).trim();
+          if (f === 'SINAPI') {
+            // SINAPI: só dígitos. Remove leading zeros.
+            const onlyDigits = trimmed.replace(/[^0-9]/g, '');
+            return onlyDigits.replace(/^0+/, '') || onlyDigits;
+          }
+          if (f === 'ORSE') {
+            // ORSE: principalmente dígitos com prefixo opcional. Remove
+            // letras nas pontas que costumam ser ruído ("S98525S" → "98525")
+            return trimmed.replace(/^[A-Za-z]+|[A-Za-z]+$/g, '') || trimmed;
+          }
+          // SICRO/SEINFRA/etc: mantém como está (alfanuméricos válidos)
+          return trimmed;
+        }
+        const codeOriginal = c.codigo ?? '';
+        const codeNormalizado = isPropria ? mybaseCode : normalizarCodeBanco(codeOriginal, c.fonte);
+        if (codeOriginal !== codeNormalizado && !isPropria) {
+          console.log(`[cadastrar-orcamento] code normalizado: ${c.fonte}/${codeOriginal} → ${codeNormalizado} (item ${c.item_codigo})`);
+        }
+        if (!codeNormalizado) continue;
         if (isPropria && !c.orcafascio_composition_id) continue;
 
         items.push({
@@ -549,7 +577,7 @@ Deno.serve(async (req: Request) => {
           base: fonteToBase(c.fonte),
           base_id: uuidv4(),
           public_banco_id: isPropria ? c.orcafascio_composition_id ?? '' : '',
-          code: String(code),
+          code: String(codeNormalizado),
           qty: Number(c.quantidade ?? 0),
         });
         composicoesCriadas++;
