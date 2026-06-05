@@ -59,10 +59,12 @@ interface RequestBody {
   licitacao_id?: string;
   credential_id?: string;
   trace_id?: string;
-  /** Se true, pula a auto-correção do total (ajustarValor → totalExtraido).
-   * Default false — sempre força match com edital. Override útil pra
-   * debug ou pra quando o orçamentista quer ver o orçamento "cru" do
-   * Orçafascio antes de ajustar manualmente. */
+  /** Se true, força ajustarValor inline (chama dentro deste request).
+   * DEFAULT FALSE desde jun/2026 — ajustarValor inline corrompe budgets.
+   * Quando false, orçamento sai com total = soma dos items (pode divergir
+   * do edital). Usar "Forçar total" do OrçaPav AI pra ajuste manual depois. */
+  forcar_total_inline?: boolean;
+  /** DEPRECATED — sem efeito desde jun/2026 (default agora é não forçar). */
   pular_forcar_total_edital?: boolean;
   /** Cria uma 2ª versão como PROPOSTA. BDI permanece igual ao edital
    * (regra de licitação: desconto não incide sobre BDI). Pra aplicar o
@@ -558,29 +560,40 @@ Deno.serve(async (req: Request) => {
     // o que o órgão avalia no julgamento da proposta.
     //
     // Opt-out: body.pular_forcar_total_edital=true.
-    if (!isProposta && !body.pular_forcar_total_edital) {
+    if (!isProposta && body.forcar_total_inline === true) {
+      // AUTO-AJUSTE DESABILITADO POR DEFAULT (jun/2026).
+      //
+      // Motivo: chamar ajustarValor logo após addItemsBatch tem chance
+      // de CORROMPER o budget (visto em SEINFRA PI, vários outros — 500
+      // ao abrir). Causa raiz ainda em investigação.
+      //
+      // Solução atual: cadastro CRIA o budget intacto, deixa o total
+      // como veio da soma dos items, e o orçamentista usa o botão
+      // "Forçar total" do OrçaPav AI quando precisar ajustar. Mais
+      // cliques mas budget sempre acessível.
+      //
+      // Pra reativar, o cliente manda body.forcar_total_inline=true.
       const totalExtraido = (comps ?? [])
         .filter((c) => c.tipo_linha === 'servico')
         .reduce((s, c) => s + (Number(c.preco_total) || 0), 0);
       if (totalExtraido > 0) {
-        // 1 chamada ajustarValor (agora com passo_1 + passo_2 implementados
-        // corretamente em orcafascio-web-v2023.ts). Chamar 2× CORROMPE o
-        // budget (visto em SEINFRA PI: cadastro → ajustar 2× → budget 500).
         try {
-          // Delay pra Orçafascio terminar de processar o addItemsBatch
-          // antes de aceitar o ajustar (race condition já vista).
           await new Promise((r) => setTimeout(r, 3000));
           await ajustarValor(ctx, budget_id, totalExtraido);
           warnings.push(
-            `✓ Auto-ajuste do total: orçamento forçado pra R$ ${totalExtraido.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (regra de licitação). Confira no Orçafascio — se divergir, use "Forçar total" no OrçaPav AI.`,
+            `✓ Auto-ajuste do total: orçamento forçado pra R$ ${totalExtraido.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}.`,
           );
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
           warnings.push(
-            `⚠ Auto-ajuste do total FALHOU (${msg.slice(0, 150)}). Use "Forçar total" no OrçaPav AI.`,
+            `⚠ Auto-ajuste do total FALHOU (${(e instanceof Error ? e.message : String(e)).slice(0, 150)}). Use "Forçar total" no OrçaPav AI.`,
           );
         }
       }
+    } else if (!isProposta) {
+      warnings.push(
+        '💡 Total do orçamento pode divergir do edital (PUs do SINAPI/etc atuais ≠ valores do edital). ' +
+        'Use "Forçar total" no painel OrçaPav AI pra ajustar pro valor exato.',
+      );
     }
 
     // ---- 8.5) Verificação pós-cadastro: confirma que o orçamento existe ----

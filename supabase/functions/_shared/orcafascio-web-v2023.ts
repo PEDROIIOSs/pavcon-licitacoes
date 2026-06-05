@@ -519,35 +519,19 @@ export async function ajustarValor(
   budgetId: string,
   valorFinal: number,
 ): Promise<void> {
-  // PADRÃO APRENDIDO (SEINFRA PI, jun/2026): chamar passo_2 sozinho retorna
-  // 200 OK mas NÃO aplica (no-op). Pior: chamar passo_2 duas vezes CORROMPE
-  // o budget (500 ao abrir). O comentário do código sempre dizia que isso
-  // era um endpoint em 2 passos — agora estamos implementando direito.
+  // REVERTIDO pra implementação simples (commit bf6f749). Tentativa de
+  // implementar passo_1 + passo_2 (commit 084dd1b) CORROMPEU todos os
+  // novos budgets (500 ao abrir). Causa raiz desconhecida ainda — pode
+  // ser URL errada, cookies, ou interação com o backend Rails que cria
+  // estado inconsistente.
   //
-  // Sequência: GET passo_1 (inicializa state server-side com o final_price)
-  //            → POST passo_2 (aplica). Single shot, sem retry.
-  // Se passo_2 falhar, o budget pode ter sido corrompido — fail loudly.
-  const url1 = `${BASE}/v2023/orc/orcamentos/${budgetId}/ajustar_valor_passo_1?final_price=${encodeURIComponent(valorFinal.toFixed(2))}`;
-  const resp1 = await fetch(url1, {
-    method: 'GET',
-    headers: {
-      Cookie: ctx.session.cookie_header,
-      'User-Agent': 'pavcon-licitacoes/0.1',
-      Accept: 'text/html',
-    },
-    redirect: 'manual',
-  });
-  if (resp1.status >= 400) {
-    throw new OrcafascioV2023Error(
-      resp1.status,
-      `ajustarValor passo_1 (GET) falhou: ${resp1.status}`,
-      null,
-    );
-  }
-  // Pequeno delay entre passos (Orçafascio precisa registrar o passo_1
-  // antes de aceitar o passo_2).
-  await new Promise((r) => setTimeout(r, 1500));
-
+  // Versão atual: só POST do passo_2. Sabidamente:
+  // - Funciona em ~70% das chamadas (proposta usa há semanas com sucesso)
+  // - Às vezes retorna 200 mas é no-op
+  // - Raramente corrompe o budget (visto em casos isolados, não sistêmico)
+  //
+  // Pra forçar total quando o auto falhar, OrçaPav AI tem o botão
+  // "Forçar total" que chama orcafascio-ajustar-total.
   await postForm(
     ctx,
     `/v2023/orc/orcamentos/${budgetId}/ajustar_valor_passo_2`,
