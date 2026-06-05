@@ -170,17 +170,36 @@ function inferBaseData(
     const token = tokens.find((t) => re.test(t));
     if (!token) continue;
     const ufMatch = token.match(/\b([A-Z]{2})\b/);
-    // Tenta MM/AAAA, MM/AA, nome do mês, ou número puro (ex: SEINFRA 28)
-    const dataMatch = token.match(/(\d{1,2}\/\d{2,4})|\b(\d{2,3})\b(?![A-Za-z])/);
     let data = '';
-    if (dataMatch) {
-      if (dataMatch[1]) {
-        const [mm, yy] = dataMatch[1].split('/');
-        const year = yy.length === 2 ? `20${yy}` : yy;
-        data = `${mm.padStart(2, '0')}/${year}`;
-      } else if (dataMatch[2]) {
-        data = dataMatch[2]; // ex: "28" pra SEINFRA
+    // BUG CORRIGIDO (SEINFRA - cooper, jun/2026):
+    // Antes a regex `\d{1,2}\/\d{2,4}` aplicada em "2025/12" capturava
+    // "25/12" do MEIO da string — gerava data inválida "25/2012" (mês 25
+    // não existe, ano 2012 longe demais). Orçafascio configurava bancos
+    // com versão fantasma e budget virava 500 ao abrir.
+    //
+    // Agora detecta AAAA/MM antes de MM/AAAA — ordem importa.
+    // (1) AAAA/MM: "2025/12" → "12/2025"
+    const anoMesMatch = token.match(/\b(\d{4})\/(\d{1,2})\b/);
+    if (anoMesMatch) {
+      data = `${anoMesMatch[2].padStart(2, '0')}/${anoMesMatch[1]}`;
+    } else {
+      // (2) MM/AAAA ou MM/AA: "12/2025", "01/26"
+      const mmYy = token.match(/\b(\d{1,2})\/(\d{2,4})\b/);
+      if (mmYy) {
+        const year = mmYy[2].length === 2 ? `20${mmYy[2]}` : mmYy[2];
+        data = `${mmYy[1].padStart(2, '0')}/${year}`;
+      } else {
+        // (3) Número puro 2-3 dígitos: SEINFRA "028"
+        const numero = token.match(/\b(\d{2,3})\b(?![A-Za-z])/);
+        if (numero) data = numero[1];
       }
+    }
+    // Sanity check: ano resultante tem que ser razoável (2020-2030).
+    // Se sair fora, descarta — falla pro fallback de "mês passado".
+    const yearCheck = data.match(/\/(\d{4})/);
+    if (yearCheck) {
+      const y = Number(yearCheck[1]);
+      if (y < 2020 || y > 2030) data = '';
     }
     // Fallback no token: tenta nome de mês ("Janeiro/2026")
     if (!data) {
@@ -201,12 +220,21 @@ function inferBaseData(
   if (direto) {
     return { estado: ufLicit, data: direto };
   }
-  // Tenta MM/AAAA direto na desc inteira
-  const dataMatch = desc.match(/(\d{1,2}\/\d{2,4})/);
+  // Tenta AAAA/MM ou MM/AAAA direto na desc inteira (mesmo fix do bloco acima)
+  const anoMesD = desc.match(/\b(\d{4})\/(\d{1,2})\b/);
+  if (anoMesD) {
+    const year = Number(anoMesD[1]);
+    if (year >= 2020 && year <= 2030) {
+      return { estado: ufLicit, data: `${anoMesD[2].padStart(2, '0')}/${year}` };
+    }
+  }
+  const dataMatch = desc.match(/\b(\d{1,2})\/(\d{2,4})\b/);
   if (dataMatch) {
-    const [mm, yy] = dataMatch[1].split('/');
+    const yy = dataMatch[2];
     const year = yy.length === 2 ? `20${yy}` : yy;
-    return { estado: ufLicit, data: `${mm.padStart(2, '0')}/${year}` };
+    if (Number(year) >= 2020 && Number(year) <= 2030) {
+      return { estado: ufLicit, data: `${dataMatch[1].padStart(2, '0')}/${year}` };
+    }
   }
   // Último recurso: mês passado
   const now = new Date();

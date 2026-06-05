@@ -251,22 +251,37 @@ Deno.serve(async (req: Request) => {
     //  → SINAPI: "02/2026", SEINFRA: "28", ORSE: "01/2026", SICRO: "10/2025"
     function parseDataBasePorBanco(descricao: string | undefined, banco: string): string | null {
       if (!descricao) return null;
-      // Variantes: SICRO/SICRO3, ORSE, SINAPI, SEINFRA, SBC, etc
       const variants = [banco, banco.replace(/3$/, '')];
       for (const v of variants) {
-        // Match: BANCO seguido de até 30 chars não-numéricos + número
-        const re = new RegExp(`${v}\\b[^,/]*?(\\d{1,2}\\s*\\/\\s*\\d{2,4}|\\b\\d{2,3}\\b)`, 'i');
+        // BUG CORRIGIDO (SEINFRA - cooper, jun/2026): captura ORDENADA —
+        // tenta AAAA/MM PRIMEIRO (ex: "2025/12"), senão MM/AAAA (ex: "12/2025"),
+        // senão número puro. Antes a regex `\d{1,2}\/\d{2,4}` aplicada em
+        // "2025/12" matchava "25/12" do meio → resultava "25/2012" → budget 500.
+        const re = new RegExp(
+          `${v}\\b[^,/]*?(\\b\\d{4}\\/\\d{1,2}\\b|\\b\\d{1,2}\\/\\d{2,4}\\b|\\b\\d{2,3}\\b)`,
+          'i',
+        );
         const m = descricao.match(re);
-        if (m) {
-          // Normaliza formato MM/AAAA (ou retorna número puro pra SEINFRA)
-          const raw = m[1].trim();
-          if (raw.includes('/')) {
-            const [mm, yy] = raw.split('/').map((p) => p.trim());
-            const year = yy.length === 2 ? `20${yy}` : yy;
-            return `${mm.padStart(2, '0')}/${year}`;
-          }
+        if (!m) continue;
+        const raw = m[1].trim();
+        if (!raw.includes('/')) {
           return raw; // ex: "28" pra SEINFRA
         }
+        const [a, b] = raw.split('/').map((p) => p.trim());
+        let mm: string, year: string;
+        if (a.length === 4) {
+          // AAAA/MM
+          year = a;
+          mm = b.padStart(2, '0');
+        } else {
+          // MM/AAAA ou MM/AA
+          mm = a.padStart(2, '0');
+          year = b.length === 2 ? `20${b}` : b;
+        }
+        // Sanity check: ano razoável
+        const y = Number(year);
+        if (y < 2020 || y > 2030) continue;
+        return `${mm}/${year}`;
       }
       return null;
     }

@@ -331,36 +331,39 @@ function detectarServicosSemFonte(ctx: ContextoAnalise): Diagnostico[] {
 // "forçar total" via ajustarValor — fix pragmático enquanto a re-extração
 // completa não roda.
 function detectarOrcamentoAbaixoDoEdital(ctx: ContextoAnalise): Diagnostico[] {
-  // Só faz sentido se tem budget cadastrado.
+  // DESABILITADO (jun/2026): a ação "Forçar total" chama ajustarValor que
+  // CORROMPE o budget no Orçafascio (visto consistentemente em SEFIR 02,
+  // SEINFRA, SEGOV — budget vira 500 ao abrir depois da chamada). Causa
+  // raiz é endpoint /ajustar_valor_passo_2 — chamar sozinho às vezes
+  // funciona, às vezes corrompe; mas o risco não vale a pena.
+  //
+  // Substituto: orçamentista deve ajustar valor MANUALMENTE pela interface
+  // do Orçafascio (Editar > Ajustar valor). A UI deles faz o sequenciamento
+  // certo (passo_1 carrega o form, passo_2 confirma) que nossa API não
+  // consegue replicar via HTTP direto.
+  //
+  // Quando descobrirmos como replicar o sequenciamento, reativar este
+  // detector retornando o diagnóstico com acao_acionavel forcar_total_inline.
   if (!ctx.licitacao.orcafascio_orcamento_base_id) return [];
   const totalExtraido = ctx.totalExtraidoServicos ?? 0;
   if (totalExtraido <= 0) return [];
-  // Quando temos composições em branco (= sub_itens faltando), o orçamento
-  // no Orçafascio fica abaixo do total extraído. Mesmo sem saber o total
-  // exato no Orçafascio, oferecer "forçar total" é seguro: o backend chama
-  // ajustarValor que aplica fator linear pro target.
   const temComposVazias = (ctx.composicoesVazias?.length ?? 0) > 0;
-  if (!temComposVazias) return []; // não precisa forçar se tá tudo populado
+  if (!temComposVazias) return [];
   const moeda = (n: number) =>
     n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  // Devolve um AVISO sem ação clicável — só informa pro orçamentista
+  // que ele precisa ajustar manualmente no Orçafascio.
   return [{
-    tipo: 'orcamento_abaixo_do_edital',
-    severidade: 'erro',
-    titulo: `Forçar total do orçamento = ${moeda(totalExtraido)}`,
+    tipo: 'orcamento_abaixo_do_edital_manual',
+    severidade: 'aviso',
+    titulo: `Total deve ser ${moeda(totalExtraido)} — ajustar MANUAL no Orçafascio`,
     mensagem:
-      `${ctx.composicoesVazias?.length ?? 0} composição(ões) em branco vão ` +
-      `contribuir R$ 0,00 — o total do Orçafascio fica abaixo do edital. ` +
-      `O OrçaPav AI aplica "Ajustar valor" (fator linear) pra forçar o total ` +
-      `bater com ${moeda(totalExtraido)}.`,
+      `${ctx.composicoesVazias?.length ?? 0} composição(ões) em branco contribuem R$ 0,00 ` +
+      `— total do Orçafascio fica abaixo do edital. NÃO use Forçar Total automático ` +
+      `(API ajustarValor do Orçafascio corrompe budgets — bug deles).`,
     sugestao:
-      'Solução pragmática enquanto a re-extração com sub-itens completos não roda. ' +
-      'Distribuição interna fica imperfeita (composições em R$ 0 continuam zeradas), ' +
-      'mas o total bate com o edital — suficiente pra submissão.',
-    acao_acionavel: {
-      tipo: 'forcar_total_inline',
-      params: { valor_alvo: totalExtraido },
-      label: `🎯 Forçar total = ${moeda(totalExtraido)}`,
-    },
+      `Abre o orçamento no Orçafascio, vai em "Editar → Ajustar valor", ` +
+      `cola ${moeda(totalExtraido)} e confirma. A UI deles aplica certinho.`,
     contexto: { total_extraido: totalExtraido },
   }];
 }
