@@ -28,6 +28,7 @@ export interface GeminiCallResult {
   usage: GeminiUsage;
   rawJson: unknown;
   estimatedCostUsd: number;
+  modelUsed: string; // pode diferir do opts.model quando houve fallback
 }
 
 export interface GeminiInlinePart {
@@ -75,14 +76,69 @@ interface CallGeminiOpts {
   traceId?: string;
 }
 
+// Modelos em ordem de fallback quando há 429 no modelo principal
+const FALLBACK_MODELS: Record<string, string[]> = {
+  'gemini-2.5-pro': ['gemini-2.5-flash', 'gemini-2.0-flash'],
+  'gemini-2.5-flash': ['gemini-2.0-flash'],
+};
+
+const RETRY_DELAYS_MS = [10_000, 30_000, 60_000]; // 10s, 30s, 60s
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 /**
  * Chama generateContent no Gemini, audita a chamada e devolve o texto +
  * tokens usados + custo estimado. Lança GeminiError em status não-2xx.
+ * Faz retry automático com backoff exponencial em caso de 429.
+ * Se todos os retries falharem, tenta modelos de fallback.
  */
 export async function callGemini(
   opts: CallGeminiOpts,
 ): Promise<GeminiCallResult> {
-  const url = `${GEMINI_API_BASE}/models/${opts.model}:generateContent?key=${opts.apiKey}`;
+  // Tenta o modelo principal com retries, depois os fallbacks
+  const modelsToTry = [opts.model, ...(FALLBACK_MODELS[opts.model] ?? [])];
+
+  let lastError: GeminiError | null = null;
+
+  for (const model of modelsToTry) {
+    const result = await _callGeminiOnce(opts, model);
+    if (result.ok) return result.value!;
+    lastError = result.error!;
+    // Só avança para fallback se for 429; outros erros lançam imediatamente
+    if (lastError.status !== 429) throw lastError;
+    console.warn(`[gemini] ${model} retornou 429 após retries — tentando modelo de fallback`);
+  }
+
+  throw lastError!;
+}
+
+async function _callGeminiOnce(
+  opts: CallGeminiOpts,
+  model: string,
+): Promise<{ ok: true; value: GeminiCallResult } | { ok: false; error: GeminiError }> {
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    if (attempt > 0) {
+      const delay = RETRY_DELAYS_MS[attempt - 1];
+      console.warn(`[gemini] 429 recebido, aguardando ${delay / 1000}s antes da tentativa ${attempt + 1}/${RETRY_DELAYS_MS.length + 1} (modelo: ${model})`);
+      await sleep(delay);
+    }
+
+    const result = await _executeGeminiRequest(opts, model);
+    if (result.ok) return result;
+    if (result.error!.status !== 429) return result; // erro não-retriable
+    if (attempt === RETRY_DELAYS_MS.length) return result; // esgotou retries
+  }
+  // nunca chega aqui
+  return { ok: false, error: new GeminiError(429, 'Retries esgotados') };
+}
+
+async function _executeGeminiRequest(
+  opts: CallGeminiOpts,
+  model: string,
+): Promise<{ ok: true; value: GeminiCallResult } | { ok: false; error: GeminiError }> {
+  const url = `${GEMINI_API_BASE}/models/${model}:generateContent?key=${opts.apiKey}`;
   const startedAt = Date.now();
 
   const body = {
@@ -119,7 +175,7 @@ export async function callGemini(
     endpoint: safeUrl,
     metodo_http: 'POST',
     request_payload: {
-      model: opts.model,
+      model,
       parts_summary: opts.parts.map((p) =>
         'text' in p
           ? { type: 'text', length: p.text.length }
@@ -146,14 +202,20 @@ export async function callGemini(
   });
 
   if (!response.ok) {
-    throw new GeminiError(
-      response.status,
-      `Gemini respondeu ${response.status}.`,
-      parsed ?? rawText.slice(0, 500),
-    );
+    return {
+      ok: false,
+      error: new GeminiError(
+        response.status,
+        `Gemini respondeu ${response.status}.`,
+        parsed ?? rawText.slice(0, 500),
+      ),
+    };
   }
   if (!parsed) {
-    throw new GeminiError(502, 'Resposta do Gemini não é JSON válido.', rawText.slice(0, 500));
+    return {
+      ok: false,
+      error: new GeminiError(502, 'Resposta do Gemini não é JSON válido.', rawText.slice(0, 500)),
+    };
   }
 
   const candidates = (parsed as {
@@ -163,24 +225,31 @@ export async function callGemini(
     }>;
   }).candidates;
   if (!candidates || candidates.length === 0) {
-    throw new GeminiError(502, 'Gemini não retornou candidates.', parsed);
+    return { ok: false, error: new GeminiError(502, 'Gemini não retornou candidates.', parsed) };
   }
   const finishReason = candidates[0].finishReason;
   const text = candidates[0].content?.parts?.[0]?.text ?? null;
   if (!text) {
-    throw new GeminiError(
-      502,
-      `Gemini terminou com finishReason="${finishReason}" mas sem texto.`,
-      parsed,
-    );
+    return {
+      ok: false,
+      error: new GeminiError(
+        502,
+        `Gemini terminou com finishReason="${finishReason}" mas sem texto.`,
+        parsed,
+      ),
+    };
   }
 
   const usage = (parsed as { usageMetadata?: GeminiUsage }).usageMetadata ?? {};
   return {
-    status: response.status,
-    text,
-    usage,
-    rawJson: parsed,
-    estimatedCostUsd: estimateGeminiCost(usage),
+    ok: true,
+    value: {
+      status: response.status,
+      text,
+      usage,
+      rawJson: parsed,
+      estimatedCostUsd: estimateGeminiCost(usage),
+      modelUsed: model,
+    },
   };
 }

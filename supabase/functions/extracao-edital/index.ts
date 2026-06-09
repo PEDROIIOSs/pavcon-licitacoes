@@ -394,6 +394,7 @@ Deno.serve(async (req: Request) => {
       .update({
         status: 'sucesso',
         json_extraido: { cabecalho: parsed.cabecalho, itens: parsed.itens },
+        llm_model: result.modelUsed, // atualiza com o modelo realmente usado (pode ser fallback)
         tokens_input: result.usage.promptTokenCount ?? null,
         tokens_output: result.usage.candidatesTokenCount ?? null,
         custo_usd: result.estimatedCostUsd,
