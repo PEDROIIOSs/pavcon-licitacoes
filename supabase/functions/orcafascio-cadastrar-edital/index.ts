@@ -60,11 +60,13 @@ import {
   createComposition,
   createGroup,
   createResource,
+  deleteComposition,
   deleteResource,
   findCompositionByCode,
   findGroupByDescription,
   findMyBaseResourceByCode,
   fonteToBank,
+  getComposition,
   OrcafascioApiError,
   pickUF,
   RESOURCE_TYPE,
@@ -493,51 +495,67 @@ Deno.serve(async (req: Request) => {
     let composicoesPuladas = 0;
     let itensAdicionados = 0;
 
+    // Regex que identifica codes gerados por versões antigas do código:
+    // formato "<licitacaoId8>_<item>" ex: "7EF9FE3B_1_1_5" ou "7EF9FE_COMP01".
+    // Esses codes precisam ser recriados com o código correto do órgão.
+    const PREFIXO_HEX_ANTIGO = /^[0-9A-F]{6,8}_/;
+
+    // Sanitiza string pra ser code válido no Orçafascio: trim + upper + remove
+    // acentos + troca não-alfanuméricos por underscore. Máximo 40 chars.
+    // Definida fora do loop para evitar redefinição a cada iteração.
+    const sanitize = (raw: string): string =>
+      raw
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        .toUpperCase()
+        .trim()
+        .replace(/[^A-Z0-9_-]/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_|_$/g, '')
+        .slice(0, 40);
+
     for (const comp of (composicoes as ComposicaoExtraida[])) {
-      // Idempotência: se já tem orcafascio_composition_id, pula
-      if (comp.orcafascio_composition_id) {
-        composicoesPuladas++;
-        continue;
-      }
-
-      // Code da composição no MyBase. Estratégia:
-      // 1. SE o edital trouxe um código próprio (comp.codigo, ex: "ADM LOCAL",
-      //    "REG1"), usa esse (mais legível pro orçamentista — bate com a
-      //    nomenclatura do órgão).
-      // 2. Senão, fallback pra 'COMPOSIC_<item_codigo>'.
-      // Em todo caso, sanitiza removendo PONTOS/espaços — find_by_code do
-      // Orçafascio retorna 500 silencioso pra codes com múltiplos pontos
-      // (ex: "COMPOSIC_1.1.1"). Trocando ponto por underscore resolve.
-      // Sanitiza string pra ser code válido: trim + upper + remove acentos +
-      // troca não-alfanuméricos por underscore. Mantém máximo 40 chars.
-      const sanitize = (raw: string): string =>
-        raw
-          .normalize('NFD')
-          .replace(/[̀-ͯ]/g, '') // remove acentos
-          .toUpperCase()
-          .trim()
-          .replace(/[^A-Z0-9_-]/g, '_')
-          .replace(/_+/g, '_')
-          .replace(/^_|_$/g, '')
-          .slice(0, 40);
-
-      // Code da composição no MyBase: seguir o nome do edital sem prefixos.
-      // Feedback do orçamentista (Estádio Batalha): "evitar muitas variações no
-      // nome, seguir sempre o código usado pelo órgão — ex: COMPOSIÇÃO 09".
-      // Estratégia:
-      //   - codigo do edital existe → usa só ele sanitizado ("COMPOSIÇÃO 09" → "COMPOSICAO_09")
-      //   - codigo do edital ausente → fallback pra "COMPOSIC_<item_codigo>"
-      //
-      // RISCO conhecido: 2 editais diferentes com mesmo `codigo` (ex: ambos
-      // têm "ADM_LOCAL") podem colidir no MyBase via findCompositionByCode.
-      // Mitigação: `second_code` carrega LICITACAO_<id_short>_<item> pra
-      // rastreabilidade. Se colisão atrapalhar na prática, adicionar sufixo
-      // diferenciador depois.
+      // Code do órgão: usa o código próprio do edital sanitizado ("COMPOSIÇÃO 09" →
+      // "COMPOSICAO_09"), ou fallback pra "COMPOSIC_<item_codigo>" quando ausente.
+      // Aceita pequenas variações de separador (_/-/.) no início/fim — a sanitize
+      // normaliza tudo. NUNCA adiciona prefixo aleatório/uuid.
       const codigo = (
         comp.codigo && comp.codigo.trim()
           ? sanitize(comp.codigo)
           : `COMPOSIC_${sanitize(comp.item_codigo)}`
       ).slice(0, 50);
+
+      // Idempotência com verificação de code antigo:
+      // Se já tem orcafascio_composition_id, verifica se o code no Orçafascio
+      // tem o prefixo hex do formato antigo ("<licitacaoId8>_<item>").
+      // Se sim: deleta e recria com o código correto do órgão.
+      // Se não: pula normalmente.
+      if (comp.orcafascio_composition_id) {
+        try {
+          const compExistente = await getComposition(ctx, comp.orcafascio_composition_id);
+          if (!PREFIXO_HEX_ANTIGO.test(compExistente.code)) {
+            composicoesPuladas++;
+            continue; // code já está no formato correto — pula
+          }
+          // Code com prefixo hex antigo: deleta e força recriação
+          console.log(
+            `[cadastrar-edital] code antigo detectado "${compExistente.code}" → recriando como "${codigo}"`,
+          );
+          await deleteComposition(ctx, comp.orcafascio_composition_id).catch((e) => {
+            warnings.push(
+              `Falha ao apagar composição antiga ${compExistente.code}: ${e instanceof Error ? e.message.slice(0, 100) : String(e)}`,
+            );
+          });
+          await admin
+            .from('composicoes_extraidas')
+            .update({ orcafascio_composition_id: null })
+            .eq('id', comp.id);
+          comp.orcafascio_composition_id = null;
+        } catch {
+          // Não conseguiu verificar (ex: composição foi apagada manualmente) — tenta criar
+          comp.orcafascio_composition_id = null;
+        }
+      }
       const descricao = (comp.descricao ?? 'Composição própria do edital').slice(0, 500);
       const unidade = (comp.unidade ?? 'Un').slice(0, 20);
 
